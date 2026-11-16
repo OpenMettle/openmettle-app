@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 void main() {
   runApp(const OpenMettleApp());
@@ -9,9 +9,10 @@ class OpenMettleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return WidgetsApp(
       title: 'OpenMettle',
-      home: Scaffold(body: Center(child: Text('OpenMettle'))),
+      color: const Color(0xFF222222),
+      builder: (context, child) => const Center(child: Text('OpenMettle')),
     );
   }
 }
