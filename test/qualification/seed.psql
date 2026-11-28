@@ -46,6 +46,11 @@ INSERT INTO openmettle.conversations (scope_id, scope_kind, owner_user_id)
 VALUES (:'scope_id', 'personal', :'user_id') RETURNING id AS conversation_id \gset
 INSERT INTO openmettle.conversation_branches (scope_id, conversation_id)
 VALUES (:'scope_id', :'conversation_id') RETURNING id AS branch_id \gset
+-- Branches are paged by (created_at, id). Put both managed branches on
+-- page two so Back has to restore a row outside the first 50.
+INSERT INTO openmettle.conversation_branches (scope_id, conversation_id, created_at)
+SELECT :'scope_id', :'conversation_id', now() - interval '1 day'
+FROM generate_series(1, 50);
 -- Publish a common turn, fork at that turn, then advance the two heads independently.
 INSERT INTO openmettle.branch_heads (scope_id, conversation_id, branch_id)
 VALUES (:'scope_id', :'conversation_id', :'branch_id');

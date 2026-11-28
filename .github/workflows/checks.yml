@@ -89,6 +89,12 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
+      - name: Verify local creation time across New Year and fractional UTC offsets
+        run: |
+          TZ=America/St_Johns flutter test --no-pub test/history_choice_test.dart \
+            --dart-define='EXPECTED_HISTORY_LABEL=Created Dec 31, 2025 at 21:45 (UTC-03:30)'
+          TZ=Asia/Kathmandu flutter test --no-pub test/history_choice_test.dart \
+            --dart-define='EXPECTED_HISTORY_LABEL=Created Jan 1, 2026 at 07:00 (UTC+05:45)'
       - name: Test session, run and conversation reads in Chrome
         run: >-
           flutter test --no-pub --platform chrome
@@ -96,6 +102,7 @@ jobs:
           test/api/run_reads_test.dart
           test/api/history_reads_test.dart
           test/conversation_history_test.dart
+          test/history_choice_test.dart
           test/session_screen_test.dart
           test/runs/run_replay_test.dart
           test/runs/run_status_view_test.dart

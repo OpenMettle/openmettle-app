@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'history.dart';
+import 'history_choice.dart';
 
 class ConversationHistoryView extends StatefulWidget {
   const ConversationHistoryView({
@@ -23,19 +24,31 @@ class ConversationHistoryView extends StatefulWidget {
   State<ConversationHistoryView> createState() => _ConversationHistoryState();
 }
 
+/// The row chosen from a list and how many pages had been read at the time.
+typedef _Selection = ({String id, int pages});
+
 class _ConversationHistoryState extends State<ConversationHistoryView> {
   String? _conversationId;
   String? _branchId;
+  // Only identifiers are kept for Back; every list is read again on return.
+  _Selection? _conversation;
+  _Selection? _branch;
 
   void _back() {
     if (_branchId != null) {
       setState(() => _branchId = null);
     } else if (_conversationId != null) {
-      setState(() => _conversationId = null);
+      setState(() {
+        _conversationId = null;
+        _branch = null;
+      });
     } else {
       widget.onBack();
     }
   }
+
+  // Do not take focus back from a control the user moved to during the read.
+  bool _canMoveFocus() => !widget.signOutFocus.hasFocus;
 
   @override
   Widget build(BuildContext context) {
@@ -50,14 +63,22 @@ class _ConversationHistoryState extends State<ConversationHistoryView> {
       content = _HistoryList<ConversationSummary>(
         read: (cursor) => source.conversations(cursor: cursor),
         idOf: (conversation) => conversation.id,
-        item: (conversation) => _HistoryChoice(
+        item: (conversation, pages, focusNode) => HistoryChoice(
           label: 'Conversation ${conversation.id}',
           createdAt: conversation.createdAt,
-          onPressed: () => setState(() => _conversationId = conversation.id),
+          focusNode: focusNode,
+          onPressed: () => setState(() {
+            _conversationId = conversation.id;
+            _conversation = (id: conversation.id, pages: pages);
+            _branch = null;
+          }),
         ),
         heading: heading,
         empty: 'No personal conversations.',
         more: 'Load more conversations',
+        restore: _conversation,
+        missing: 'Could not find that conversation on the pages checked.',
+        canMoveFocus: _canMoveFocus,
         onSessionExpired: widget.onSessionExpired,
       );
     } else if (branchId == null) {
@@ -66,15 +87,22 @@ class _ConversationHistoryState extends State<ConversationHistoryView> {
         key: ValueKey(conversationId),
         read: (cursor) => source.branches(conversationId, cursor: cursor),
         idOf: (branch) => branch.id,
-        item: (branch) => _HistoryChoice(
+        item: (branch, pages, focusNode) => HistoryChoice(
           label: 'Branch ${branch.id}',
           createdAt: branch.createdAt,
           note: branch.historyAvailable ? null : 'History unavailable',
-          onPressed: () => setState(() => _branchId = branch.id),
+          focusNode: focusNode,
+          onPressed: () => setState(() {
+            _branchId = branch.id;
+            _branch = (id: branch.id, pages: pages);
+          }),
         ),
         heading: heading,
         empty: 'No branches.',
         more: 'Load more branches',
+        restore: _branch,
+        missing: 'Could not find that branch on the pages checked.',
+        canMoveFocus: _canMoveFocus,
         onSessionExpired: widget.onSessionExpired,
       );
     } else {
@@ -84,7 +112,7 @@ class _ConversationHistoryState extends State<ConversationHistoryView> {
         read: (cursor) =>
             source.messages(conversationId, branchId, cursor: cursor),
         idOf: (message) => message.id,
-        item: (message) => _Message(message: message),
+        item: (message, _, _) => _Message(message: message),
         heading: heading,
         empty: 'No messages on this branch.',
         more: 'Load older messages',
@@ -136,46 +164,6 @@ class _ConversationHistoryState extends State<ConversationHistoryView> {
   }
 }
 
-class _HistoryChoice extends StatelessWidget {
-  const _HistoryChoice({
-    required this.label,
-    required this.createdAt,
-    required this.onPressed,
-    this.note,
-  });
-
-  final String label;
-  final String createdAt;
-  final VoidCallback onPressed;
-  final String? note;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(top: 8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextButton(
-              onPressed: onPressed,
-              child: Text(label, textAlign: TextAlign.start),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(
-                [createdAt, ?note].join('\n'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _HistoryList<T> extends StatefulWidget {
   const _HistoryList({
     super.key,
@@ -187,16 +175,29 @@ class _HistoryList<T> extends StatefulWidget {
     required this.more,
     required this.onSessionExpired,
     this.chronological = false,
+    this.restore,
+    this.missing = '',
+    this.canMoveFocus,
   });
 
   final Future<HistoryPage<T>> Function(String? cursor) read;
   final String Function(T) idOf;
-  final Widget Function(T) item;
+
+  /// Builds a row from its item, the number of pages read so far and the
+  /// focus node to attach when the row should receive focus.
+  final Widget Function(T, int pages, FocusNode? focusNode) item;
   final String heading;
   final String empty;
   final String more;
   final VoidCallback onSessionExpired;
   final bool chronological;
+
+  /// A row to find and focus after the list is read again from its head.
+  final _Selection? restore;
+
+  /// Announced when [restore] is no longer within the pages read before.
+  final String missing;
+  final bool Function()? canMoveFocus;
 
   @override
   State<_HistoryList<T>> createState() => _HistoryListState<T>();
@@ -205,15 +206,29 @@ class _HistoryList<T> extends StatefulWidget {
 class _HistoryListState<T> extends State<_HistoryList<T>> {
   final _items = <String, T>{};
   final _requestedCursors = <String>{};
+  final _rowFocus = FocusNode();
+  final _controlFocus = FocusNode();
   String? _nextCursor;
+  int _pages = 0;
   bool _historyAvailable = true;
   bool _loading = true;
   HistoryFailure? _failure;
+  // Rows stay hidden while an earlier position is sought.
+  late bool _restoring = widget.restore != null;
+  bool _restoreMissing = false;
+  String? _focusId;
 
   @override
   void initState() {
     super.initState();
     _read(null);
+  }
+
+  @override
+  void dispose() {
+    _rowFocus.dispose();
+    _controlFocus.dispose();
+    super.dispose();
   }
 
   Future<void> _read(String? cursor) async {
@@ -225,10 +240,13 @@ class _HistoryListState<T> extends State<_HistoryList<T>> {
       if (_requestedCursors.contains(page.nextCursor)) {
         throw HistoryFailure.invalidCursor;
       }
+      final restore = widget.restore;
+      var seek = false;
       setState(() {
-        _loading = false;
         _historyAvailable = page.historyAvailable;
         if (!_historyAvailable) {
+          _loading = false;
+          _restoring = false;
           _items.clear();
           _nextCursor = null;
           return;
@@ -237,7 +255,16 @@ class _HistoryListState<T> extends State<_HistoryList<T>> {
           _items.putIfAbsent(widget.idOf(item), () => item);
         }
         _nextCursor = page.nextCursor;
+        _pages++;
+        if (_restoring && restore != null) {
+          final found = _items.containsKey(restore.id);
+          // Never read beyond the depth the user had reached before.
+          seek = !found && _nextCursor != null && _pages < restore.pages;
+          if (!seek) _finishRestore(found ? restore.id : null);
+        }
+        _loading = seek;
       });
+      if (seek) _read(_nextCursor);
     } catch (error) {
       if (error == HistoryFailure.unauthenticated) {
         // The session screen checks that this request still belongs to its
@@ -246,18 +273,44 @@ class _HistoryListState<T> extends State<_HistoryList<T>> {
         return;
       }
       if (!mounted) return;
+      final restoring = _restoring;
       setState(() {
         _loading = false;
         _failure = error is HistoryFailure ? error : HistoryFailure.unavailable;
+        if (_failure == HistoryFailure.inaccessible) _restoring = false;
         if (_failure == HistoryFailure.inaccessible ||
             _failure == HistoryFailure.invalidCursor ||
             _failure == HistoryFailure.invalidResponse) {
           _requestedCursors.clear();
           _items.clear();
           _nextCursor = null;
+          _pages = 0;
         }
       });
+      // A refused list has no controls; focus stays on Back.
+      if (restoring && _failure != HistoryFailure.inaccessible) {
+        _focusAfterBuild(_controlFocus);
+      }
     }
+  }
+
+  /// Focuses the restored row, or the first row with an announcement if it
+  /// is no longer listed. Called inside setState.
+  void _finishRestore(String? id) {
+    _restoring = false;
+    _restoreMissing = id == null;
+    _focusId = id ?? _items.keys.firstOrNull;
+    _focusAfterBuild(_focusId == null ? _controlFocus : _rowFocus);
+  }
+
+  void _focusAfterBuild(FocusNode node) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !(widget.canMoveFocus?.call() ?? true)) return;
+      final context = node.context;
+      if (context == null) return;
+      node.requestFocus();
+      Scrollable.ensureVisible(context, alignment: 0.5);
+    });
   }
 
   void _load() {
@@ -265,6 +318,7 @@ class _HistoryListState<T> extends State<_HistoryList<T>> {
     setState(() {
       _loading = true;
       _failure = null;
+      _restoreMissing = false;
     });
     _read(_nextCursor);
   }
@@ -279,45 +333,75 @@ class _HistoryListState<T> extends State<_HistoryList<T>> {
       _ when _loading => 'Loading history…',
       _ when !_historyAvailable => 'History is unavailable for this branch.',
       _ when _items.isEmpty && _nextCursor == null => widget.empty,
+      _ when _restoreMissing => widget.missing,
       _ => null,
     };
     final canLoad =
         !_loading &&
         _failure != HistoryFailure.inaccessible &&
         (_failure != null || _nextCursor != null);
-    final items = widget.chronological
-        ? _items.values.toList().reversed
-        : _items.values;
+    final values = _restoring ? <T>[] : _items.values;
+    final items = widget.chronological ? values.toList().reversed : values;
+    final notice = status == null
+        ? null
+        : Semantics(liveRegion: true, child: Text(status));
     final control = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (status != null) Semantics(liveRegion: true, child: Text(status)),
+        if (!_restoreMissing && notice != null) notice,
         if (canLoad)
           OutlinedButton(
+            focusNode: _controlFocus,
             onPressed: _load,
             child: Text(_failure == null ? widget.more : 'Retry'),
           ),
       ],
     );
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      children: [
-        Semantics(
-          header: true,
-          child: Text(
-            widget.heading,
-            style: Theme.of(context).textTheme.headlineMedium,
+    final children = <Widget>[
+      Semantics(
+        header: true,
+        child: Text(
+          widget.heading,
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
+      ),
+      const SizedBox(height: 12),
+      if (_restoreMissing && notice != null) notice,
+      if (widget.chronological) control,
+      for (final item in items)
+        KeyedSubtree(
+          key: ValueKey(widget.idOf(item)),
+          child: widget.item(
+            item,
+            _pages,
+            widget.idOf(item) == _focusId ? _rowFocus : null,
           ),
         ),
-        const SizedBox(height: 12),
-        if (widget.chronological) control,
-        for (final item in items)
-          KeyedSubtree(
-            key: ValueKey(widget.idOf(item)),
-            child: widget.item(item),
+      if (!widget.chronological) control,
+    ];
+    const padding = EdgeInsets.fromLTRB(24, 8, 24, 24);
+    final focusId = _focusId;
+    if (focusId == null || focusId == _items.keys.firstOrNull) {
+      return ListView(padding: padding, children: children);
+    }
+    // Start layout at the verified row. Both sides of the list stay lazy
+    // even when item heights differ or the selected row is several pages in.
+    final pivot = children.indexWhere(
+      (child) => child.key == ValueKey(focusId),
+    );
+    if (pivot < 0) return ListView(padding: padding, children: children);
+    const center = ValueKey('restored history row');
+    return Padding(
+      padding: padding,
+      child: CustomScrollView(
+        center: center,
+        slivers: [
+          SliverList.list(
+            children: children.sublist(0, pivot).reversed.toList(),
           ),
-        if (!widget.chronological) control,
-      ],
+          SliverList.list(key: center, children: children.sublist(pivot)),
+        ],
+      ),
     );
   }
 }
