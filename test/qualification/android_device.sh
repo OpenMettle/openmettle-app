@@ -37,8 +37,7 @@ HOSTS
 adb reboot
 timeout 120 adb wait-for-device
 timeout 240 bash -c 'until adb shell getprop sys.boot_completed 2>/dev/null | grep -qx 1; do sleep 2; done'
-adb root
-timeout 30 adb wait-for-device
+bash test/qualification/adb_root.sh
 adb reverse tcp:443 tcp:18444
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard

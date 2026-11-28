@@ -25,14 +25,12 @@ booted
 [[ $(adb shell getprop ro.build.version.sdk) == 33 && $(adb shell getprop ro.debuggable) == 1 ]]
 # The test CAs and synthetic DNS names belong to this AVD only. Mount the image's
 # temporary writable overlay before installing them. The AVD is never snapshotted.
-adb root
-timeout 30 adb wait-for-device
+bash test/qualification/adb_root.sh
 adb disable-verity
 adb reboot
 timeout 90 adb wait-for-device
 booted
-adb root
-timeout 30 adb wait-for-device
+bash test/qualification/adb_root.sh
 adb remount
 adb shell pm path com.android.statementservice | grep -q '^package:'
 
