@@ -35,7 +35,9 @@ flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.da
 flutter build web --no-pub
 ```
 
-Client tests use synthetic responses and pinned core contract fixtures. A real identity-provider journey through this Flutter app and Android/iOS sign-in require separate qualification. Choose application identifiers and signing settings before generating the native platform shells.
+Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload, signs out and reloads again. The job uses per-run trust and synthetic identities.
+
+The browser check covers the web session on the CI runner. Invitation-code entry, native sign-in and site ingress qualification are separate work. Choose application identifiers and signing settings before generating the native platform shells.
 
 ## Boundaries
 

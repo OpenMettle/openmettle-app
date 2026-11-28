@@ -1,0 +1,92 @@
+# CI-only NGINX configuration for the hosted Flutter browser qualification. run.sh fills in
+# @WORK@ (private per-run directory), @WEB@ (compiled Flutter output) and @API@ (loopback
+# API address) and runs NGINX unprivileged on a disposable runner. Not a deployment template.
+#
+# One HTTPS origin, https://app.relying.test:18443: the compiled Flutter app at / and /app
+# (the browser profile's landing path), and the exact browser sign-in and capabilities routes
+# proxied to the API unchanged. No access log: request targets carry the provider callback's
+# code and state. Runtime proxy errors can include the same data.
+worker_processes 1;
+pid @WORK@/nginx/nginx.pid;
+error_log /dev/null;
+
+events {
+    worker_connections 64;
+}
+
+http {
+    access_log off;
+    server_tokens off;
+    client_body_temp_path @WORK@/nginx/body;
+    proxy_temp_path @WORK@/nginx/proxy;
+    fastcgi_temp_path @WORK@/nginx/fastcgi;
+    uwsgi_temp_path @WORK@/nginx/uwsgi;
+    scgi_temp_path @WORK@/nginx/scgi;
+
+    # Explicit types for the Flutter web build instead of the distribution's mime.types.
+    # WebAssembly must be application/wasm for streaming compilation.
+    types {
+        text/html html;
+        text/javascript js mjs;
+        text/css css;
+        application/json json map;
+        application/wasm wasm;
+        image/png png;
+        image/x-icon ico;
+        image/svg+xml svg;
+        font/otf otf;
+        font/ttf ttf;
+        font/woff2 woff2;
+    }
+    default_type application/octet-stream;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_certificate @WORK@/app-tls/certificate.pem;
+    ssl_certificate_key @WORK@/app-tls/key.pem;
+
+    # Any other host name is refused, so only the application origin reaches the API.
+    server {
+        listen 127.0.0.1:18443 ssl default_server;
+        server_name _;
+        return 421;
+    }
+
+    server {
+        listen 127.0.0.1:18443 ssl;
+        server_name app.relying.test;
+        root @WEB@;
+
+        # Pass the request through: the browser's Host, Origin, Fetch Metadata, Cookie and
+        # body reach the API as sent, and the API's Location and Set-Cookie reach the browser.
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header Connection "";
+        proxy_redirect off;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+        proxy_send_timeout 30s;
+
+        location = /login { proxy_pass http://@API@; }
+        location = /callback { proxy_pass http://@API@; }
+        location = /session { proxy_pass http://@API@; }
+        location = /logout { proxy_pass http://@API@; }
+        location = /v1/capabilities { proxy_pass http://@API@; }
+
+        # The page needs same-origin referrers so the sign-in form carries its Origin.
+        location = / {
+            add_header Referrer-Policy same-origin always;
+            add_header X-Content-Type-Options nosniff always;
+            try_files /index.html =404;
+        }
+        location = /app {
+            add_header Referrer-Policy same-origin always;
+            add_header X-Content-Type-Options nosniff always;
+            try_files /index.html =404;
+        }
+        location / {
+            add_header Referrer-Policy same-origin always;
+            add_header X-Content-Type-Options nosniff always;
+            try_files $uri =404;
+        }
+    }
+}
