@@ -46,12 +46,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Install pinned Flutter SDK
+      - name: Set up pinned Flutter and the runner’s Android SDK tools
         shell: bash
         run: |
           git clone --depth 1 --branch 3.50.0 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = ab2912035e160d9cad6306df307576da6128ebdb
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$RUNNER_TEMP/flutter/bin" "$ANDROID_HOME/cmdline-tools/latest/bin" \
+            "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
       - run: flutter pub get --enforce-lockfile
       - run: dart format --output=none --set-exit-if-changed lib test
