@@ -1,11 +1,7 @@
-# CI-only NGINX configuration for the hosted Flutter browser qualification. run.sh fills in
-# @WORK@ (private per-run directory), @WEB@ (compiled Flutter output) and @API@ (loopback
-# API address) and runs NGINX unprivileged on a disposable runner. Not a deployment template.
-#
-# One HTTPS origin, https://app.relying.test:18443: the compiled Flutter app at / and /app
-# (the browser profile's landing path), and the exact browser sign-in and capabilities routes
-# proxied to the API unchanged. The capabilities log stores only the status. Request targets carry the provider callback's
-# code and state. Runtime proxy errors can include the same data.
+# run.sh renders this file for an unprivileged NGINX on the disposable CI runner.
+# It supplies the work and web directories, loopback API address and seeded run ID.
+# One HTTPS origin serves Flutter at / and /app and forwards the configured API routes.
+# Access logs store status codes only. A callback URL contains the provider code and state.
 worker_processes 1;
 pid @WORK@/nginx/nginx.pid;
 error_log /dev/null;
@@ -78,6 +74,18 @@ http {
         location = /auth/native/logout { proxy_pass http://@API@; }
         location = /v1/capabilities {
             access_log @WORK@/nginx/capabilities-status status_only;
+            proxy_pass http://@API@;
+        }
+        # Only the disposable run used by this journey. Its cancel route is
+        # the driver's independent stimulus. Keep the replay cursor out of logs.
+        location = /v1/runs/@RUN_ID@ {
+            access_log @WORK@/nginx/snapshot-status status_only;
+            proxy_pass http://@API@;
+        }
+        location = /v1/runs/@RUN_ID@/cancel { proxy_pass http://@API@; }
+        location = /v1/runs/@RUN_ID@/events {
+            access_log @WORK@/nginx/events-status status_only;
+            proxy_buffering off;
             proxy_pass http://@API@;
         }
 

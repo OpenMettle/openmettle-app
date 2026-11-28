@@ -120,7 +120,9 @@ class RunReplayController extends ChangeNotifier {
 
     final RunSnapshot snapshot;
     try {
-      snapshot = await _source.snapshot(runId);
+      // A source can refuse immediately while its view is mounting. Deliver
+      // access-loss notifications after the current build in either case.
+      snapshot = await Future.sync(() => _source.snapshot(runId));
     } catch (error) {
       if (_current(generation)) {
         _handleFailure(error, terminalRequired: terminalRequired);

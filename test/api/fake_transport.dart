@@ -64,3 +64,40 @@ HttpReply Function(SentRequest) api(
   headers: {'content-type': contentType, 'openmettle-api-version': ?version},
   body: body,
 );
+
+/// One recorded [StreamingTransport.open] call. [cancelled] is set when the
+/// caller completes its cancel signal.
+class OpenedRequest {
+  OpenedRequest(this.url, this.accept, Future<void> cancel) {
+    cancel.then((_) => cancelled = true);
+  }
+
+  final Uri url;
+  final String accept;
+  bool cancelled = false;
+}
+
+/// A scripted [Transport] that is also a [StreamingTransport]: [stream]
+/// answers each [open], or throws [TransportFailure] for a lost head.
+class FakeStreamingTransport extends FakeTransport
+    implements StreamingTransport {
+  FakeStreamingTransport(this.stream) : super(_unexpected);
+
+  Future<StreamedReply> Function(OpenedRequest request) stream;
+
+  final opened = <OpenedRequest>[];
+
+  static HttpReply _unexpected(SentRequest _) =>
+      throw StateError('unexpected unary send');
+
+  @override
+  Future<StreamedReply> open(
+    Uri url, {
+    required String accept,
+    required Future<void> cancel,
+  }) {
+    final request = OpenedRequest(url, accept, cancel);
+    opened.add(request);
+    return stream(request);
+  }
+}

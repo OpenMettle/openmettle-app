@@ -4,10 +4,21 @@ import 'run_replay.dart';
 
 /// Read-only status for a single run in the caller's current session.
 class RunStatusView extends StatefulWidget {
-  const RunStatusView({super.key, required this.source, required this.runId});
+  const RunStatusView({
+    super.key,
+    required this.source,
+    required this.runId,
+    this.resumeOnForeground = true,
+    this.onAccessLost,
+  });
 
   final RunReplaySource source;
   final String runId;
+
+  /// Set to false when the parent revalidates the session and remounts this
+  /// view after foregrounding. The view still pauses immediately on hide.
+  final bool resumeOnForeground;
+  final ValueChanged<RunReplayPhase>? onAccessLost;
 
   @override
   State<RunStatusView> createState() => _RunStatusViewState();
@@ -34,7 +45,16 @@ class _RunStatusViewState extends State<RunStatusView>
 
   void _openRun() {
     _replay = RunReplayController(source: widget.source, runId: widget.runId);
+    _replay.addListener(_reportAccessLoss);
     if (_visible) _replay.start();
+  }
+
+  void _reportAccessLoss() {
+    final phase = _replay.phase;
+    if (phase == RunReplayPhase.unauthenticated ||
+        phase == RunReplayPhase.inaccessible) {
+      widget.onAccessLost?.call(phase);
+    }
   }
 
   @override
@@ -55,6 +75,8 @@ class _RunStatusViewState extends State<RunStatusView>
     _visible = visible;
     if (!visible) {
       _replay.pause();
+    } else if (!widget.resumeOnForeground) {
+      return;
     } else if (_replay.phase == RunReplayPhase.idle) {
       _replay.start();
     } else {

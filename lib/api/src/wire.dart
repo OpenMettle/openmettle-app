@@ -16,7 +16,11 @@ final _uuid = RegExp(
 final _timestamp = RegExp(
   r'^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.[0-9]{6}Z$',
 );
+final _cursor = RegExp(r'^[A-Za-z0-9_-]{1,512}$');
 const _observedStates = {'ready', 'degraded', 'unavailable'};
+
+/// An opaque server-issued `Cursor`: 1 to 512 base64url characters.
+bool isCursor(String value) => _cursor.hasMatch(value);
 
 Never _bad(int? status) =>
     throw ApiFailure(ApiFailureKind.badResponse, status: status);

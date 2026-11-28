@@ -1,7 +1,9 @@
-"""Add the exact Android registration to the private core CI fixture."""
+"""Configure the disposable API for Android sign-in and web run replay."""
 import base64
 import hashlib
 import json
+import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -21,6 +23,12 @@ def update_fixture(path, stage):
             raise ValueError("unexpected fixture redirect")
         client["redirectUris"].append(CALLBACK)
     elif stage == "settings":
+        key = path.resolve().with_name("run-cursor.bin")
+        with os.fdopen(os.open(key, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "wb") as output:
+            output.write(secrets.token_bytes(32))
+        document["cursor_keys"] = {
+            "active": {"id": "fixture-cursor", "path": str(key)}, "verify_only": [],
+        }
         document["native"] = {
             "provider_id": document["browser"]["provider_id"], "issuer": ISSUER,
             "callback": CALLBACK, "client_id": CLIENT, "redirect_uri": REDIRECT,

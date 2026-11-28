@@ -1,9 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'api/app_client.dart';
 import 'api/client.dart';
+import 'runs/run_replay.dart';
+import 'runs/run_status_view.dart';
+import 'runs/run_wire.dart' show isCanonicalRunId;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,7 +24,7 @@ class OpenMettleApp extends StatelessWidget {
     return MaterialApp(
       title: 'OpenMettle',
       theme: ThemeData(colorSchemeSeed: const Color(0xFF155A5B)),
-      home: _SessionScreen(client: client),
+      home: _SessionScreen(key: ObjectKey(client), client: client),
     );
   }
 }
@@ -40,7 +44,7 @@ enum _Phase {
 }
 
 class _SessionScreen extends StatefulWidget {
-  const _SessionScreen({required this.client});
+  const _SessionScreen({super.key, required this.client});
 
   final SessionClient client;
 
@@ -51,6 +55,7 @@ class _SessionScreen extends StatefulWidget {
 class _SessionScreenState extends State<_SessionScreen> {
   final _primaryFocus = FocusNode();
   final _signOutFocus = FocusNode();
+  final _openRunFocus = FocusNode();
   late final AppLifecycleListener _lifecycle;
   StreamSubscription<void>? _updates;
   bool _hidden = false;
@@ -58,6 +63,10 @@ class _SessionScreenState extends State<_SessionScreen> {
   int _request = 0;
   bool _recheckOnShow = false;
   List<Capability> _capabilities = const [];
+  bool _openingRun = false;
+  String? _runId;
+  bool _runInaccessible = false;
+  bool _restoreOpenRunFocus = false;
 
   @override
   void initState() {
@@ -87,6 +96,7 @@ class _SessionScreenState extends State<_SessionScreen> {
     _lifecycle.dispose();
     _primaryFocus.dispose();
     _signOutFocus.dispose();
+    _openRunFocus.dispose();
     super.dispose();
   }
 
@@ -101,6 +111,7 @@ class _SessionScreenState extends State<_SessionScreen> {
         // Discard an in-flight read or handoff before revalidating on return.
         _recheckOnShow = true;
         _request++;
+        _openingRun = false;
         _show(_Phase.checking);
       default:
         break;
@@ -145,6 +156,12 @@ class _SessionScreenState extends State<_SessionScreen> {
     setState(() {
       _phase = phase;
       _capabilities = capabilities;
+      if (phase != _Phase.checking &&
+          phase != _Phase.loading &&
+          phase != _Phase.signedIn) {
+        _clearRun();
+        _restoreOpenRunFocus = false;
+      }
     });
   }
 
@@ -172,6 +189,14 @@ class _SessionScreenState extends State<_SessionScreen> {
       final capabilities = await widget.client.capabilities();
       if (_isCurrent(request)) {
         _show(_Phase.signedIn, capabilities: capabilities);
+        if (_restoreOpenRunFocus) {
+          _restoreOpenRunFocus = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_isCurrent(request) && _openRunFocus.context != null) {
+              _openRunFocus.requestFocus();
+            }
+          });
+        }
       }
     } on SessionExpired {
       if (_isCurrent(request)) _show(_Phase.signedOut);
@@ -229,8 +254,115 @@ class _SessionScreenState extends State<_SessionScreen> {
     }
   }
 
+  void _clearRun() {
+    _openingRun = false;
+    _runId = null;
+    _runInaccessible = false;
+  }
+
+  void _backFromRun() {
+    if (_phase != _Phase.signedIn) return;
+    _clearRun();
+    _restoreOpenRunFocus = true;
+    _load();
+  }
+
+  void _openRun(String id) {
+    if (_hidden || _phase != _Phase.signedIn || !_openingRun) return;
+    setState(() {
+      _openingRun = false;
+      _runId = id;
+    });
+  }
+
+  void _runAccessLost(int request, RunReplayPhase phase) {
+    if (!_isCurrent(request) || _runId == null) return;
+    if (phase == RunReplayPhase.unauthenticated) {
+      _request++;
+      _show(_Phase.signedOut);
+    } else {
+      setState(() {
+        _runId = null;
+        _runInaccessible = true;
+      });
+    }
+  }
+
+  Widget _buildRunScreen(RunReplaySource source) {
+    final runId = _runId;
+    final request = _request;
+    final Widget contents;
+    if (_openingRun) {
+      contents = _RunEntryForm(onSubmit: _openRun);
+    } else if (runId != null) {
+      contents = RunStatusView(
+        key: ValueKey(request),
+        source: source,
+        runId: runId,
+        resumeOnForeground: false,
+        onAccessLost: (phase) => _runAccessLost(request, phase),
+      );
+    } else {
+      contents = ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              'Run status',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: const Text('This run is unavailable.'),
+          ),
+        ],
+      );
+    }
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): _backFromRun,
+      },
+      child: Focus(
+        child: Scaffold(
+          body: SafeArea(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+                      child: TextButton(
+                        key: ValueKey(_openingRun),
+                        autofocus: !_openingRun,
+                        onPressed: _backFromRun,
+                        child: const Text('Back'),
+                      ),
+                    ),
+                    Expanded(child: contents),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final client = widget.client;
+    final canOpenRun = _phase == _Phase.signedIn && client is RunReplaySource;
+    if (canOpenRun && (_openingRun || _runId != null || _runInaccessible)) {
+      return _buildRunScreen(client as RunReplaySource);
+    }
+
     final status = switch (_phase) {
       _Phase.checking => 'Checking your session…',
       _Phase.loading => 'Loading capabilities…',
@@ -290,6 +422,12 @@ class _SessionScreenState extends State<_SessionScreen> {
                           onPressed: _signOut,
                           child: const Text('Sign out'),
                         ),
+                      if (canOpenRun)
+                        OutlinedButton(
+                          focusNode: _openRunFocus,
+                          onPressed: () => setState(() => _openingRun = true),
+                          child: const Text('Open run'),
+                        ),
                     ],
                   ),
                 ],
@@ -310,6 +448,77 @@ class _SessionScreenState extends State<_SessionScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RunEntryForm extends StatefulWidget {
+  const _RunEntryForm({required this.onSubmit});
+
+  final ValueChanged<String> onSubmit;
+
+  @override
+  State<_RunEntryForm> createState() => _RunEntryFormState();
+}
+
+class _RunEntryFormState extends State<_RunEntryForm> {
+  final _form = GlobalKey<FormState>();
+  final _input = TextEditingController();
+  final _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_form.currentState!.validate()) {
+      widget.onSubmit(_input.text);
+    } else {
+      _focus.requestFocus();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Form(
+      key: _form,
+      child: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          Semantics(
+            header: true,
+            child: Text(
+              'Open run',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextFormField(
+            controller: _input,
+            focusNode: _focus,
+            autofocus: true,
+            autocorrect: false,
+            enableSuggestions: false,
+            textInputAction: TextInputAction.go,
+            decoration: const InputDecoration(labelText: 'Run ID'),
+            validator: (value) => value != null && isCanonicalRunId(value)
+                ? null
+                : 'Enter a lowercase UUID.',
+            onFieldSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton(
+              onPressed: _submit,
+              child: const Text('View status'),
+            ),
+          ),
+        ],
       ),
     );
   }

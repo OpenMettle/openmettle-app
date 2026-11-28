@@ -21,6 +21,12 @@ Serve the Flutter HTML page with `Referrer-Policy: same-origin`. With `no-referr
 
 If sign-in does not open, select **Check session** to recover. If the session has expired, sign in again. If the service is unavailable, retry after it recovers. If logout cannot be confirmed, retry sign-out before leaving a shared browser.
 
+### Follow a run in the web client
+
+After signing in, select **Open run**, enter the lowercase UUID of an existing run and select **View status**. Flutter loads its current state and listens for updates until the run ends. Select **Back** or press Escape to return to capabilities. If the API reports that the run is inaccessible or missing, the screen displays the same message in both cases. If the session expires, sign in again.
+
+Configure `cursor_keys` in the API's version 2 authentication settings. Route both `GET /v1/runs/{run_id}` and `GET /v1/runs/{run_id}/events` to the API on the app's origin. Configure the proxy to forward event-stream bytes as they arrive. Flutter uses the last complete event's cursor to reconnect. Select **Retry** if automatic recovery stops. [Core run snapshot and replay contract](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0034-ordered-events-and-replayable-sse.md)
+
 ## Connect an Android debug build
 
 Configure the three public build settings to match the API's version-2 `native` profile. The issuer is the HTTPS origin serving the API. The client ID identifies this native registration. Use a dedicated HTTPS App Link on a DNS host with a literal path. The provider registers the API's upstream callback. Android handles the separate App Link after the API completes sign-in. [Core native profile](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0029-native-sign-in-mounting-and-session-context.md)
@@ -74,11 +80,13 @@ flutter pub get --enforce-lockfile
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze --no-pub
 flutter test --no-pub
-flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart test/runs/run_replay_test.dart test/runs/run_status_view_test.dart
+flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart \
+  test/api/run_reads_test.dart test/session_screen_test.dart \
+  test/runs/run_replay_test.dart test/runs/run_status_view_test.dart
 flutter build web --no-pub
 ```
 
-Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload, signs out and reloads again. The job uses per-run trust and synthetic identities.
+Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload and opens a queued personal run. The driver cancels that run through core. Flutter must display **Cancelled** from the event stream after a single snapshot. Chrome then signs out and reloads again. The job uses per-run trust and synthetic identities.
 
 The Android CI journey installs the debug APK on a disposable Android 13 (API 33) AOSP emulator. Android's StatementService fetches the association from the private test host. The journey checks Android's verification result, drives the installed Chromium browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator.
 
@@ -98,4 +106,4 @@ If the server rejects a cursor, the replay controller discards the previous stat
 
 ## Boundaries
 
-The server owns permissions, approvals, quotas and run state. Authenticated HTTP streaming and run selection in chat are tracked in [V1-34](https://github.com/OpenMettle/openmettle-app/issues/2). See the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md), [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md) and [delivery tracker](https://github.com/OpenMettle/openmettle-core/issues/1).
+The server owns permissions, approvals, quotas and run state. Chat composition, branch navigation and recovery are tracked in [V1-34](https://github.com/OpenMettle/openmettle-app/issues/2). See the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md), [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md) and [delivery tracker](https://github.com/OpenMettle/openmettle-core/issues/1).

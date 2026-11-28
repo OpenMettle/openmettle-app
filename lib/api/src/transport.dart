@@ -53,3 +53,30 @@ abstract interface class Transport {
   /// body.
   void submitForm(Uri action);
 }
+
+/// A response head whose body is still arriving.
+class StreamedReply {
+  const StreamedReply(this.head, this.body);
+
+  /// Status, URL, type and [Transport.headerNames]; its `body` is empty.
+  final HttpReply head;
+
+  /// The body bytes, single-subscription. Reading stops while the
+  /// subscription is paused, and cancelling it aborts the request. A lost
+  /// connection or an abort ends it with [TransportFailure].
+  final Stream<List<int>> body;
+}
+
+/// Same-origin `GET` with an incrementally read body, under the same request
+/// rules as [Transport.send] but without a built-in timeout: the caller
+/// decides how long to wait, so a healthy long-lived stream is not cut off.
+abstract interface class StreamingTransport implements Transport {
+  /// Starts a `GET` and completes with the response head. Completing
+  /// [cancel] aborts the request at any stage, including a pending head or
+  /// an unread body. Throws [TransportFailure] when no head is received.
+  Future<StreamedReply> open(
+    Uri url, {
+    required String accept,
+    required Future<void> cancel,
+  });
+}

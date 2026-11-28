@@ -113,6 +113,49 @@ def signed_in(browser):
     wait_http(browser, "/v1/capabilities", 200, "live capabilities response was not HTTP 200")
 
 
+def follow_run(browser, run_id, failure):
+    # The driver supplies a state transition independently of the read-only
+    # Flutter UI. Only the selected fixture run has a cancel route in nginx.
+    path = "/v1/runs/" + run_id
+    click_app(browser, "/app", "Open run", failure)
+    field = """all.find(element => element instanceof HTMLInputElement
+        && element.getAttribute('aria-label') === 'Run ID')"""
+    wait_app(browser, "/app", f"!!button('View status') && !!{field}",
+             "run ID form did not render")
+    point = browser.evaluate(app_script("/app", f"""
+        const rect = {field}?.getBoundingClientRect();
+        if (!rect?.width || !rect.height) return false;
+        return {{x: rect.x + rect.width / 2, y: rect.y + rect.height / 2}};
+    """))
+    if not isinstance(point, dict):
+        raise failure("run ID field unavailable")
+    for kind in ("mousePressed", "mouseReleased"):
+        browser.call("Input.dispatchMouseEvent", type=kind, button="left", clickCount=1, **point)
+    wait_app(browser, "/app", f"{field}?.matches(':focus')", "run ID field did not take focus")
+    browser.call("Input.insertText", text=run_id)
+    wait_app(browser, "/app", f"{field}?.value === {json.dumps(run_id)}",
+             "run ID did not reach the text field")
+    browser.call("Input.dispatchKeyEvent", type="keyDown", key="Enter", code="Enter",
+                 windowsVirtualKeyCode=13, text="\r")
+    browser.call("Input.dispatchKeyEvent", type="keyUp", key="Enter", code="Enter",
+                 windowsVirtualKeyCode=13)
+    wait_app(browser, "/app", "text('Queued')", "queued run snapshot did not render")
+    wait_http(browser, path, 200, "run snapshot did not complete as HTTP 200")
+
+    cancel = json.dumps(path + "/cancel")
+    if browser.evaluate(app_script("/app", f"""
+        return fetch({cancel}, {{method: 'POST', credentials: 'same-origin',
+            mode: 'same-origin', redirect: 'error', referrerPolicy: 'same-origin',
+            headers: {{'Idempotency-Key': 'qualification-cancel'}}
+        }}).then(reply => reply.status === 200);
+    """)) is not True:
+        raise failure("core did not cancel the fixture run")
+    wait_app(browser, "/app", "text('Run ended') && text('Cancelled')",
+             "streamed cancellation did not render")
+    click_app(browser, "/app", "Back", failure)
+    signed_in(browser)
+
+
 def reload_app(browser):
     # Let the predicate for the next document distinguish it from the old
     # document, whose signed-in controls may remain while reload commits.
@@ -124,7 +167,7 @@ def reload_app(browser):
         "app did not reload", APP_SECONDS)
 
 
-def journey(browser, provider, realm, account, qualify, keycloak, enter):
+def journey(browser, provider, realm, account, run_id, qualify, keycloak, enter):
     enter("signed-out Flutter landing")
     qualify.open_target(browser)
     browser.call("Page.navigate", url=APPLICATION + "/")
@@ -148,6 +191,9 @@ def journey(browser, provider, realm, account, qualify, keycloak, enter):
     reload_app(browser)
     enable_semantics(browser, "/app", qualify.Failure)
     signed_in(browser)
+
+    enter("Flutter run snapshot and event stream")
+    follow_run(browser, run_id, qualify.Failure)
 
     enter("Flutter sign-out")
     click_app(browser, "/app", "Sign out", qualify.Failure)
@@ -180,30 +226,31 @@ def fixture_account(directory, keycloak):
     return account
 
 
-def run(directory, app_ca, qualify, keycloak, home, enter):
+def run(directory, app_ca, run_id, qualify, keycloak, home, enter):
     enter("fixture input")
     account = fixture_account(directory, keycloak)
     _, app_host, _, _ = keycloak.site(APPLICATION, path_allowed=False)
     provider, host, port, realm = keycloak.site(ISSUER, path_allowed=True)
     address = keycloak.provider_address(host, port)
     qualify.drive(
-        lambda browser: journey(browser, provider, realm, account, qualify, keycloak, enter),
+        lambda browser: journey(browser, provider, realm, account, run_id, qualify, keycloak, enter),
         [app_ca.read_bytes(), (directory / "provider-ca.pem").read_bytes()],
         keycloak.resolver_rules(app_host, host, address), home, enter,
     )
 
 
 def main():
-    if len(sys.argv) != 4:
-        sys.exit("usage: journey.py CORE_DIR FIXTURE_DIR APP_CA_PEM")
-    core, directory, app_ca = map(Path, sys.argv[1:])
+    if len(sys.argv) != 5:
+        sys.exit("usage: journey.py CORE_DIR FIXTURE_DIR APP_CA_PEM RUN_ID")
+    core, directory, app_ca = map(Path, sys.argv[1:4])
+    run_id = sys.argv[4]
     try:
         sys.path.insert(0, str(core.resolve() / "tests/browser"))
         import keycloak
         import qualify
     except Exception:
         sys.exit("core browser helpers unavailable")
-    qualify.execute(lambda home, enter: run(directory, app_ca, qualify, keycloak, home, enter), 240)
+    qualify.execute(lambda home, enter: run(directory, app_ca, run_id, qualify, keycloak, home, enter), 240)
     print("Flutter browser qualification passed")
 
 

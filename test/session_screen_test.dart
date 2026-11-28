@@ -5,6 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:openmettle_app/api/client.dart';
 import 'package:openmettle_app/main.dart';
+import 'package:openmettle_app/runs/run_replay.dart';
+import 'package:openmettle_app/runs/run_wire.dart';
+
+import 'qualification/run_reconnect_app.dart';
 
 const _installed = Capability(
   id: 'search.web',
@@ -67,6 +71,34 @@ class _NativeClient extends _FakeSessionClient implements SessionUpdates {
   Stream<void> get sessionUpdates => links.stream;
 }
 
+class _RunClient extends _FakeSessionClient implements RunReplaySource {
+  final snapshots = <String>[];
+  final streams = <StreamController<RunReplayEvent>>[];
+  Future<RunSnapshot> Function(String) read = InterruptedRunFixture().snapshot;
+
+  @override
+  Future<RunSnapshot> snapshot(String runId) {
+    snapshots.add(runId);
+    return read(runId);
+  }
+
+  @override
+  Stream<RunReplayEvent> events(String runId, String cursor) {
+    final controller = StreamController<RunReplayEvent>();
+    streams.add(controller);
+    addTearDown(() => unawaited(controller.close()));
+    return controller.stream;
+  }
+}
+
+Future<void> _openRun(WidgetTester tester) async {
+  await tester.tap(find.text('Open run'));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byType(TextFormField), fixtureRunId);
+  await tester.testTextInput.receiveAction(TextInputAction.go);
+  await tester.pumpAndSettle();
+}
+
 void _visibility(WidgetTester tester, {required bool visible}) {
   tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
   tester.binding.handleAppLifecycleStateChanged(
@@ -75,6 +107,201 @@ void _visibility(WidgetTester tester, {required bool visible}) {
 }
 
 void main() {
+  testWidgets('offers run entry only to signed-in replay clients', (
+    tester,
+  ) async {
+    await tester.pumpWidget(OpenMettleApp(client: _FakeSessionClient()));
+    await tester.pumpAndSettle();
+    expect(find.text('Signed in'), findsOneWidget);
+    expect(find.text('Open run'), findsNothing);
+
+    final client = _RunClient()..session = () async => false;
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Open run'), findsNothing);
+    expect(client.snapshots, isEmpty);
+  });
+
+  testWidgets('opens a UUID by keyboard and restores focus on Back', (
+    tester,
+  ) async {
+    final client = _RunClient();
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    final open = find.widgetWithText(OutlinedButton, 'Open run');
+    tester.widget<OutlinedButton>(open).focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    final input = find.byType(TextFormField);
+    final edit = find.byType(EditableText);
+    expect(tester.widget<EditableText>(edit).focusNode.hasFocus, isTrue);
+    for (final invalid in ['/v1/runs/$fixtureRunId', ' $fixtureRunId']) {
+      await tester.enterText(input, invalid);
+      await tester.testTextInput.receiveAction(TextInputAction.go);
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a lowercase UUID.'), findsOneWidget);
+      expect(tester.widget<EditableText>(edit).focusNode.hasFocus, isTrue);
+      expect(client.snapshots, isEmpty);
+      expect(client.calls, ['session', 'capabilities']);
+    }
+
+    await tester.enterText(input, fixtureRunId);
+    await tester.testTextInput.receiveAction(TextInputAction.go);
+    await tester.pumpAndSettle();
+    expect(find.text('Queued'), findsOneWidget);
+    expect(find.text(fixtureRunId), findsNothing);
+    expect(client.snapshots, [fixtureRunId]);
+    expect(client.streams.single.hasListener, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.text('Queued'), findsNothing);
+    expect(client.streams.single.hasListener, isFalse);
+    expect(client.calls, [
+      'session',
+      'capabilities',
+      'session',
+      'capabilities',
+    ]);
+    expect(tester.widget<OutlinedButton>(open).focusNode!.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(tester.widget<EditableText>(edit).controller.text, isEmpty);
+  });
+
+  testWidgets('Back from a run rechecks the session before showing inventory', (
+    tester,
+  ) async {
+    final client = _RunClient();
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await _openRun(tester);
+    client.session = () async => false;
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+    expect(client.streams.single.hasListener, isFalse);
+    expect(find.text(_installed.id), findsNothing);
+    expect(find.text('Open run'), findsNothing);
+    expect(find.text('Sign in'), findsOneWidget);
+  });
+
+  testWidgets('ignores a delayed run response after Back and sign-out', (
+    tester,
+  ) async {
+    final pendingRun = Completer<RunSnapshot>();
+    final client = _RunClient()..read = (_) => pendingRun.future;
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await _openRun(tester);
+    expect(find.text('Checking run status…'), findsOneWidget);
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    pendingRun.complete(await InterruptedRunFixture().snapshot(fixtureRunId));
+    await tester.pumpAndSettle();
+    expect(find.text('Signed out'), findsOneWidget);
+    expect(find.text('Queued'), findsNothing);
+    expect(find.text('Open run'), findsNothing);
+    expect(client.streams, isEmpty);
+  });
+
+  testWidgets('a run is reopened only after successful foreground checks', (
+    tester,
+  ) async {
+    final client = _RunClient();
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await _openRun(tester);
+
+    final recheck = Completer<bool>();
+    client.session = () => recheck.future;
+    _visibility(tester, visible: false);
+    _visibility(tester, visible: true);
+    await tester.pumpAndSettle();
+    expect(find.text('Queued'), findsNothing);
+    expect(find.text('Checking your session…'), findsOneWidget);
+    expect(client.streams.single.hasListener, isFalse);
+    expect(client.snapshots, [fixtureRunId]);
+
+    recheck.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text('Queued'), findsOneWidget);
+    expect(client.snapshots, [fixtureRunId, fixtureRunId]);
+    expect(client.streams.last.hasListener, isTrue);
+
+    final failedCheck = Completer<bool>();
+    client.session = () => failedCheck.future;
+    _visibility(tester, visible: false);
+    _visibility(tester, visible: true);
+    failedCheck.completeError(StateError('check failed'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not check your session.'), findsOneWidget);
+    expect(find.text('Queued'), findsNothing);
+    expect(client.streams.last.hasListener, isFalse);
+
+    client.session = () async => true;
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open run'), findsOneWidget);
+    expect(find.text('Queued'), findsNothing);
+    expect(client.snapshots, [fixtureRunId, fixtureRunId]);
+  });
+
+  for (final refusal in [
+    RunReplayFailure.unauthenticated,
+    RunReplayFailure.forbidden,
+    RunReplayFailure.notFound,
+  ]) {
+    testWidgets('handles an immediate snapshot refusal ($refusal)', (
+      tester,
+    ) async {
+      final client = _RunClient()..read = (_) => throw refusal;
+      await tester.pumpWidget(OpenMettleApp(client: client));
+      await tester.pumpAndSettle();
+      await _openRun(tester);
+
+      final message = refusal == RunReplayFailure.unauthenticated
+          ? 'Sign in'
+          : 'This run is unavailable.';
+      expect(find.text(message), findsOneWidget);
+      expect(client.streams, isEmpty);
+      expect(client.snapshots, [fixtureRunId]);
+    });
+  }
+
+  testWidgets('run refusals clear state and an expired stream signs out', (
+    tester,
+  ) async {
+    final client = _RunClient();
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await _openRun(tester);
+    client.streams.single.addError(RunReplayFailure.forbidden);
+    await tester.pumpAndSettle();
+    expect(find.text('This run is unavailable.'), findsOneWidget);
+    expect(find.text('Queued'), findsNothing);
+    expect(client.streams.single.hasListener, isFalse);
+
+    _visibility(tester, visible: false);
+    _visibility(tester, visible: true);
+    await tester.pumpAndSettle();
+    expect(find.text('This run is unavailable.'), findsOneWidget);
+    expect(client.snapshots, [fixtureRunId]);
+
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+    await _openRun(tester);
+    client.streams.last.addError(RunReplayFailure.unauthenticated);
+    await tester.pumpAndSettle();
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Queued'), findsNothing);
+    expect(find.text('Open run'), findsNothing);
+    expect(client.streams.last.hasListener, isFalse);
+  });
+
   testWidgets('checks on launch and starts sign-in with the keyboard', (
     tester,
   ) async {
