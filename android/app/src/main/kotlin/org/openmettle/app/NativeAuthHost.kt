@@ -133,7 +133,10 @@ internal class NativeAuthChannel(
                 if (key == null || key !in SecretStore.NAMES || (value != null && value !is String)) {
                     return refuse(result)
                 }
-                storage(result) { it.write(key, value as String?) }
+                storage(result) {
+                    it.write(key, value as String?)
+                    null
+                }
             }
             "launchBrowser" -> launchBrowser(arguments(call, setOf("url"))?.get("url"), result)
             "takeLink" ->
@@ -161,7 +164,7 @@ internal class NativeAuthChannel(
         result.success(null)
     }
 
-    private fun storage(result: MethodChannel.Result, operation: (SecretStore) -> Any?) {
+    private fun storage(result: MethodChannel.Result, operation: (SecretStore) -> String?) {
         val store = NativeAuthHost.store(activity)
         NativeAuthHost.io.execute {
             val outcome = try {

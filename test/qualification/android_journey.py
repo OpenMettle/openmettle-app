@@ -1,4 +1,4 @@
-"""Drive the installed Flutter app and Android's external Chrome through real sign-in."""
+"""Drive the installed Flutter app and Android's external Chromium browser through real sign-in."""
 import http.client
 import json
 import re
@@ -12,7 +12,6 @@ from pathlib import Path
 from android_fixture import APP_ID, ISSUER
 from journey import fixture_account, provider_form
 
-CHROME = "com.android.chrome"
 PROVIDER = "https://keycloak.provider.test:8443"
 REALM = "/realms/openmettle-qualification"
 
@@ -56,9 +55,11 @@ def app_control(label, *, tap=False):
 
 
 def start_app():
-    # A launcher intent contains no callback data. Only Chrome can supply the return link.
-    adb("shell", "am", "start", "-a", "android.intent.action.MAIN",
-        "-c", "android.intent.category.LAUNCHER", "-p", APP_ID)
+    # A launcher intent contains no callback data. Only the browser can supply the return link.
+    result = adb("shell", "am", "start", "-W", "-a", "android.intent.action.MAIN",
+                 "-c", "android.intent.category.LAUNCHER", "-n", APP_ID + "/org.openmettle.app.MainActivity")
+    if b"Status: ok" not in result.splitlines():
+        raise Failure("Android did not start the Flutter launcher activity")
 
 
 class Page:
@@ -82,12 +83,12 @@ class Page:
             raise Failure("Android Chrome page action failed")
         return reply["result"].get("value")
 
-    def press(self, script):
-        pos = self.evaluate(script)
-        if not isinstance(pos, list) or len(pos) != 2:
+    def submit(self, guard, prepare=""):
+        # DevTools supplies user activation in the foreground tab. Chromium follows the
+        # form submission and dispatches the verified HTTPS link through Android.
+        script = "(() => { if (!document.hasFocus()) return false;" + guard + prepare
+        if self.evaluate(script + " submit.click(); return true; })()") is not True:
             raise Failure("browser form or origin changed")
-        self.call("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": pos[0], "y": pos[1]}])
-        self.call("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
 
 
 def wait_page(port, expected, websocket):
@@ -108,7 +109,7 @@ def wait_page(port, expected, websocket):
             ws = websocket.create_connection(f"ws://127.0.0.1:{port}/devtools/page/{target['id']}",
                                              timeout=5, suppress_origin=True)
             page = Page(ws)
-            if page.evaluate("(() => {" + expected + " return true; })()") is True:
+            if page.evaluate("(() => {" + expected + " return document.hasFocus(); })()") is True:
                 return page
             ws.close()
         time.sleep(0.3)
@@ -131,22 +132,15 @@ def run(fixture, core):
         const submit = document.querySelector('#confirm');
         if (submit?.form?.method !== 'post' || submit.form.action !== location.href) return false;
     """
-    # Native touch input keeps browser user activation across the form submission and redirect.
-    position = """
-        submit.scrollIntoView({block:'center'});
-        const r = submit.getBoundingClientRect();
-        return [r.x+r.width/2, r.y+r.height/2];
-    """
-    print("Android journey: confirmation in system Chrome", flush=True)
+    print("Android journey: confirmation in system Chromium", flush=True)
     page = wait_page(port, confirmation, websocket)
-    page.press("(() => {" + confirmation + position + "})()")
+    page.submit(confirmation)
     page.ws.close()
     print("Android journey: Keycloak sign-in", flush=True)
     guard = provider_form(PROVIDER, REALM)
     page = wait_page(port, guard, websocket)
-    page.press("(() => {" + guard +
-               f"username.value={json.dumps(account['username'])};password.value={json.dumps(account['password'])};" +
-               position + "})()")
+    page.submit(guard, f"username.value={json.dumps(account['username'])};"
+                       f"password.value={json.dumps(account['password'])};")
     page.ws.close()
     print("Android journey: OS callback to Flutter and authenticated capabilities", flush=True)
     app_control("No capabilities were reported.")
