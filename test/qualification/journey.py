@@ -123,9 +123,30 @@ def signed_in(browser):
     wait_http(browser, "/v1/capabilities", 200, "live capabilities response was not HTTP 200")
 
 
+def scroll_list_to_end(browser):
+    # Flutter renders only the rows near the viewport. Scroll the actual list
+    # with Chrome input to reach the pagination button and the subsequent row.
+    point = browser.evaluate("({x: innerWidth / 2, y: innerHeight * 0.7})")
+    browser.call("Input.synthesizeScrollGesture", **point, yDistance=-12000,
+                 speed=20000, gestureSourceType="mouse")
+
+
+def press_key(browser, key, code):
+    for event in ("keyDown", "keyUp"):
+        browser.call("Input.dispatchKeyEvent", type=event, key=key, code=key,
+                     windowsVirtualKeyCode=code)
+
+
 def read_history(browser, ids, failure):
     base = "/v1/conversations"
     branches = f"{base}/{ids.conversation}/branches"
+
+    # Count only successful Flutter continuations for this collection.
+    # A pre-Back request cannot satisfy the subsequent check.
+    reads = f"""performance.getEntriesByType('resource').filter(entry =>
+        entry.name.split('?')[0] === {json.dumps(APPLICATION + branches)}
+        && new URL(entry.name).searchParams.has('cursor')
+        && entry.responseStatus === 200 && entry.transferSize > 0).length"""
 
     def select(label):
         wait_app(browser, "/app", f"!!button({json.dumps(label)})", "history control missing")
@@ -134,6 +155,13 @@ def read_history(browser, ids, failure):
     select("Conversations")
     select("Conversation " + ids.conversation)
     wait_http(browser, base, 200, "conversation list did not come from core", paginated=True)
+    wait_app(browser, "/app", """all.some(e => e.getAttribute('role') === 'button'
+        && [e.getAttribute('aria-label'), e.textContent].some(s => s?.trim().startsWith('Branch ')))""",
+             "the first page of branches was not displayed")
+    scroll_list_to_end(browser)
+    select("Load more branches")
+    wait_app(browser, "/app", f"({reads}) > 0", "second branch page did not come from core")
+    scroll_list_to_end(browser)
     for branch, present, absent in (
         (ids.fork, "Alternate branch follow-up.", "Original branch follow-up."),
         (ids.root, "Original branch follow-up.", "Alternate branch follow-up."),
@@ -146,12 +174,18 @@ def read_history(browser, ids, failure):
         """, "transcript did not match the selected branch")
         wait_http(browser, f"{branches}/{branch}/messages", 200,
                   "transcript did not come from core", paginated=True)
-        select("Back")
-    wait_app(browser, "/app", f"!!button({json.dumps('Branch ' + ids.root)})",
-             "Back did not return to the branch list")
+        before = browser.evaluate(reads)
+        if not isinstance(before, int) or before < 1:
+            raise failure("the selected branch did not require a second page")
+        press_key(browser, "Escape", 27)
+        wait_app(browser, "/app", f"({reads}) > {before}",
+                 "Back did not revalidate the second branch page")
+        wait_app(browser, "/app", f"button({json.dumps('Branch ' + branch)})?.matches(':focus')",
+                 "Back did not restore focus to the selected branch")
     select("Back")
-    wait_app(browser, "/app", f"!!button({json.dumps('Conversation ' + ids.conversation)})",
-             "Back did not return to the conversation list")
+    wait_app(browser, "/app",
+             f"button({json.dumps('Conversation ' + ids.conversation)})?.matches(':focus')",
+             "Back did not restore focus to the selected conversation")
     select("Back")
     signed_in(browser)
 

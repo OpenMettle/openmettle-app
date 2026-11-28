@@ -103,6 +103,9 @@ class _HistorySession extends _Session implements ConversationSource {
 
 Future<void> _tap(WidgetTester tester, String label) async {
   final control = find.text(label);
+  if (control.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(control, 240);
+  }
   await Scrollable.ensureVisible(tester.element(control), alignment: 0.5);
   await tester.pump();
   await tester.tap(control);
@@ -119,6 +122,42 @@ Future<void> _openBranches(WidgetTester tester, _HistorySession client) async {
 Future<void> _escape(WidgetTester tester) async {
   await tester.sendKeyEvent(LogicalKeyboardKey.escape);
   await tester.pumpAndSettle();
+}
+
+/// Whether keyboard focus is inside [target].
+bool _focusedIn(WidgetTester tester, Finder target) {
+  final focused = FocusManager.instance.primaryFocus?.context;
+  if (focused == null) return false;
+  final element = tester.element(target);
+  var found = focused == element;
+  focused.visitAncestorElements((ancestor) => !(found = ancestor == element));
+  return found;
+}
+
+Finder _row(String id) => find.byKey(ValueKey(id));
+
+BranchSummary _branchNamed(String id) => BranchSummary(
+  id: id,
+  createdAt: _time,
+  parentBranchId: null,
+  historyAvailable: true,
+);
+
+/// Opens [target] from the second branch page and returns to the transcript.
+Future<void> _openSecondPageBranch(
+  WidgetTester tester,
+  _HistorySession client, {
+  List<BranchSummary> firstPage = const [_branchSummary],
+  BranchSummary target = _otherBranchSummary,
+}) async {
+  client.readBranches = (_, cursor) async => cursor == null
+      ? HistoryPage(firstPage, nextCursor: 'branches/2')
+      : HistoryPage([target]);
+  await _openBranches(tester, client);
+  await _tap(tester, 'Load more branches');
+  await _tap(tester, 'Branch ${target.id}');
+  expect(find.text('Transcript'), findsOneWidget);
+  client.calls.clear();
 }
 
 void main() {
@@ -474,4 +513,326 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'Back re-reads branches to page two before focusing the chosen row',
+    (tester) async {
+      final client = _HistorySession();
+      await _openSecondPageBranch(tester, client);
+      final pages = {
+        null: Completer<HistoryPage<BranchSummary>>(),
+        'branches/2': Completer<HistoryPage<BranchSummary>>(),
+      };
+      client.readBranches = (_, cursor) => pages[cursor]!.future;
+
+      await _escape(tester);
+      expect(find.text('Branches'), findsOneWidget);
+      expect(find.text('Loading history…'), findsOneWidget);
+      expect(find.textContaining('Branch 0000'), findsNothing);
+      expect(
+        _focusedIn(tester, find.widgetWithText(TextButton, 'Back')),
+        isTrue,
+      );
+
+      pages[null]!.complete(
+        const HistoryPage([_branchSummary], nextCursor: 'branches/2'),
+      );
+      await tester.pumpAndSettle();
+      // The first fresh page is not shown while the earlier position is sought.
+      expect(find.text('Loading history…'), findsOneWidget);
+      expect(find.text('Branch $_branch'), findsNothing);
+
+      pages['branches/2']!.complete(const HistoryPage([_otherBranchSummary]));
+      await tester.pumpAndSettle();
+      expect(client.calls, [
+        ('branches', _first, null),
+        ('branches', _first, 'branches/2'),
+      ]);
+      expect(find.text('Branch $_branch'), findsOneWidget);
+      expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+      expect(find.text('Loading history…'), findsNothing);
+      expect(find.text('Load more branches'), findsNothing);
+
+      // Enter reopens the restored row; the second Back restores it again.
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Transcript'), findsOneWidget);
+      client.readBranches = (_, cursor) async => cursor == null
+          ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+          : const HistoryPage([_otherBranchSummary]);
+      await _escape(tester);
+      expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+
+      client.calls.clear();
+      await _escape(tester);
+      expect(find.text('Personal conversations'), findsOneWidget);
+      expect(client.calls, [('conversations', null)]);
+      expect(_focusedIn(tester, _row(_first)), isTrue);
+      await _escape(tester);
+      expect(find.text('Capabilities'), findsOneWidget);
+    },
+  );
+
+  testWidgets('Back restores a conversation chosen on page two', (
+    tester,
+  ) async {
+    final client = _HistorySession()
+      ..readConversations = (cursor) async => cursor == null
+          ? const HistoryPage([_conversation], nextCursor: 'conversations/2')
+          : const HistoryPage([_anotherConversation]);
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await _tap(tester, 'Conversations');
+    await _tap(tester, 'Load more conversations');
+    await _tap(tester, 'Conversation $_second');
+    client.calls.clear();
+    await _tap(tester, 'Back');
+    expect(client.calls, [
+      ('conversations', null),
+      ('conversations', 'conversations/2'),
+    ]);
+    expect(_focusedIn(tester, _row(_second)), isTrue);
+  });
+
+  testWidgets('a row that moved earlier is found without reading further', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, _) async => const HistoryPage([
+      _otherBranchSummary,
+      _branchSummary,
+    ], nextCursor: 'branches/2');
+    await _escape(tester);
+    expect(client.calls, [('branches', _first, null)]);
+    expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+    expect(find.text('Load more branches'), findsOneWidget);
+  });
+
+  testWidgets(
+    'a missing row is announced and focus moves to the first row without '
+    'reading past the visited depth',
+    (tester) async {
+      final client = _HistorySession();
+      final semantics = tester.ensureSemantics();
+      await _openSecondPageBranch(tester, client);
+      // The chosen branch was removed and the server now has more pages.
+      client.readBranches = (_, cursor) async => cursor == null
+          ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+          : const HistoryPage([], nextCursor: 'branches/3');
+      await _escape(tester);
+      expect(client.calls, [
+        ('branches', _first, null),
+        ('branches', _first, 'branches/2'),
+      ]);
+      final notice = find.text(
+        'Could not find that branch on the pages checked.',
+      );
+      expect(notice, findsOneWidget);
+      expect(
+        tester.getSemantics(notice),
+        isSemantics(
+          label: 'Could not find that branch on the pages checked.',
+          isLiveRegion: true,
+        ),
+      );
+      expect(_focusedIn(tester, _row(_branch)), isTrue);
+      // Normal paging continues from where the restore stopped.
+      await _tap(tester, 'Load more branches');
+      expect(client.calls.last, ('branches', _first, 'branches/3'));
+      expect(notice, findsNothing);
+      semantics.dispose();
+    },
+  );
+
+  testWidgets('an emptied list keeps focus on Back', (tester) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, _) async => const HistoryPage([]);
+    await _escape(tester);
+    expect(find.text('No branches.'), findsOneWidget);
+    expect(_focusedIn(tester, find.widgetWithText(TextButton, 'Back')), isTrue);
+  });
+
+  testWidgets('a restored row below the fold is scrolled into view', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(400, 360));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = _HistorySession();
+    final firstPage = [
+      for (var i = 10; i < 20; i++)
+        _branchNamed('00000000-0000-4000-8000-0000000000$i'),
+    ];
+    await _openSecondPageBranch(tester, client, firstPage: firstPage);
+    await _escape(tester);
+    expect(
+      find.widgetWithText(TextButton, 'Branch $_otherBranch').hitTestable(),
+      findsOneWidget,
+    );
+    final rect = tester.getRect(find.text('Branch $_otherBranch'));
+    expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+    expect(rect.top, greaterThanOrEqualTo(0));
+    expect(rect.bottom, lessThanOrEqualTo(360));
+    final firstRow = find.text('Branch ${firstPage.first.id}');
+    expect(firstRow, findsNothing);
+    await tester.scrollUntilVisible(firstRow, -200);
+    await tester.pumpAndSettle();
+    expect(firstRow.hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('refusal while restoring clears rows and keeps focus on Back', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, cursor) async => cursor == null
+        ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+        : throw HistoryFailure.inaccessible;
+    await _escape(tester);
+    expect(find.text('This history is unavailable.'), findsOneWidget);
+    expect(find.textContaining('Branch 0000'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+    expect(_focusedIn(tester, find.widgetWithText(TextButton, 'Back')), isTrue);
+  });
+
+  testWidgets('a transient failure while restoring focuses Retry', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, cursor) async => cursor == null
+        ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+        : throw HistoryFailure.unavailable;
+    await _escape(tester);
+    expect(find.text('Could not load history.'), findsOneWidget);
+    expect(find.text('Branch $_branch'), findsNothing);
+    expect(
+      _focusedIn(tester, find.widgetWithText(OutlinedButton, 'Retry')),
+      isTrue,
+    );
+    client.readBranches = (_, _) async =>
+        const HistoryPage([_otherBranchSummary]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(client.calls.last, ('branches', _first, 'branches/2'));
+    expect(find.text('Branch $_otherBranch'), findsOneWidget);
+    expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+  });
+
+  testWidgets('a changed cursor while restoring restarts from the head', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, cursor) async => cursor == null
+        ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+        : throw HistoryFailure.invalidCursor;
+    await _escape(tester);
+    expect(find.text('History changed. Reload to continue.'), findsOneWidget);
+    expect(find.textContaining('Branch 0000'), findsNothing);
+    expect(
+      _focusedIn(tester, find.widgetWithText(OutlinedButton, 'Retry')),
+      isTrue,
+    );
+    client.calls.clear();
+    client.readBranches = (_, cursor) async => cursor == null
+        ? const HistoryPage([_branchSummary], nextCursor: 'fresh')
+        : const HistoryPage([_otherBranchSummary]);
+    await _tap(tester, 'Retry');
+    expect(client.calls, [
+      ('branches', _first, null),
+      ('branches', _first, 'fresh'),
+    ]);
+    expect(_focusedIn(tester, _row(_otherBranch)), isTrue);
+  });
+
+  testWidgets('expiry while restoring signs out', (tester) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    client.readBranches = (_, cursor) async => cursor == null
+        ? const HistoryPage([_branchSummary], nextCursor: 'branches/2')
+        : throw HistoryFailure.unauthenticated;
+    await _escape(tester);
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Branches'), findsNothing);
+  });
+
+  testWidgets('navigating away while restoring drops late rows and focus', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    final late = Completer<HistoryPage<BranchSummary>>();
+    client.readBranches = (_, _) => late.future;
+    await _escape(tester);
+    await _escape(tester);
+    expect(find.text('Personal conversations'), findsOneWidget);
+    expect(_focusedIn(tester, _row(_first)), isTrue);
+    late.complete(const HistoryPage([_otherBranchSummary]));
+    await tester.pumpAndSettle();
+    expect(find.text('Personal conversations'), findsOneWidget);
+    expect(find.textContaining('Branch 0000'), findsNothing);
+    expect(_focusedIn(tester, _row(_first)), isTrue);
+  });
+
+  testWidgets('a late expiry after leaving a restoring list still signs out', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    final late = Completer<HistoryPage<BranchSummary>>();
+    client.readBranches = (_, _) => late.future;
+    await _escape(tester);
+    await _escape(tester);
+    late.completeError(HistoryFailure.unauthenticated);
+    await tester.pumpAndSettle();
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Personal conversations'), findsNothing);
+  });
+
+  testWidgets('restoring does not take focus from Sign out', (tester) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    final pending = Completer<HistoryPage<BranchSummary>>();
+    client.readBranches = (_, _) => pending.future;
+    await _escape(tester);
+    final signOut = find.widgetWithText(TextButton, 'Sign out');
+    tester.widget<TextButton>(signOut).focusNode!.requestFocus();
+    await tester.pump();
+    pending.complete(const HistoryPage([_otherBranchSummary]));
+    await tester.pumpAndSettle();
+    expect(find.text('Branch $_otherBranch'), findsOneWidget);
+    expect(_focusedIn(tester, signOut), isTrue);
+  });
+
+  testWidgets('hide while restoring clears history and the return position', (
+    tester,
+  ) async {
+    final client = _HistorySession();
+    await _openSecondPageBranch(tester, client);
+    final pending = Completer<HistoryPage<BranchSummary>>();
+    client.readBranches = (_, _) => pending.future;
+    await _escape(tester);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    await tester.pumpAndSettle();
+    pending.complete(const HistoryPage([_otherBranchSummary]));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(find.text('Capabilities'), findsOneWidget);
+    expect(find.text('Branches'), findsNothing);
+    expect(find.textContaining('Branch 0000'), findsNothing);
+
+    // Reopening starts without a remembered position.
+    client.calls.clear();
+    client.readBranches = (_, _) async =>
+        const HistoryPage([_branchSummary], nextCursor: 'branches/2');
+    await _tap(tester, 'Conversations');
+    await _tap(tester, 'Conversation $_first');
+    expect(client.calls, [('conversations', null), ('branches', _first, null)]);
+    expect(_focusedIn(tester, find.widgetWithText(TextButton, 'Back')), isTrue);
+  });
 }
