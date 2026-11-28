@@ -1,5 +1,5 @@
 # run.sh renders this file for an unprivileged NGINX on the disposable CI runner.
-# It supplies the work and web directories, loopback API address and seeded run ID.
+# It supplies the work and web directories, loopback API address and the seeded run, conversation and branch IDs.
 # One HTTPS origin serves Flutter at / and /app and forwards the configured API routes.
 # Access logs store status codes only. A callback URL contains the provider code and state.
 worker_processes 1;
@@ -74,6 +74,23 @@ http {
         location = /auth/native/logout { proxy_pass http://@API@; }
         location = /v1/capabilities {
             access_log @WORK@/nginx/capabilities-status status_only;
+            proxy_pass http://@API@;
+        }
+        # Permit only the history reads exercised by the fixture.
+        location = /v1/conversations {
+            limit_except GET { deny all; }
+            proxy_pass http://@API@;
+        }
+        location = /v1/conversations/@CONVERSATION@/branches {
+            limit_except GET { deny all; }
+            proxy_pass http://@API@;
+        }
+        location = /v1/conversations/@CONVERSATION@/branches/@ROOT_BRANCH@/messages {
+            limit_except GET { deny all; }
+            proxy_pass http://@API@;
+        }
+        location = /v1/conversations/@CONVERSATION@/branches/@FORK_BRANCH@/messages {
+            limit_except GET { deny all; }
             proxy_pass http://@API@;
         }
         # Only the disposable run used by this journey. Its cancel route is

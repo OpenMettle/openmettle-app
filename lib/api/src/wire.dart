@@ -22,6 +22,12 @@ const _observedStates = {'ready', 'degraded', 'unavailable'};
 /// An opaque server-issued `Cursor`: 1 to 512 base64url characters.
 bool isCursor(String value) => _cursor.hasMatch(value);
 
+/// Core's `Uuid`: a canonical lowercase UUID.
+bool isUuid(String value) => _uuid.hasMatch(value);
+
+/// Core's open-vocabulary `Code`.
+bool isCode(Object? value) => value is String && _code.hasMatch(value);
+
 Never _bad(int? status) =>
     throw ApiFailure(ApiFailureKind.badResponse, status: status);
 

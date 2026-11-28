@@ -39,7 +39,11 @@ class TransportFailure implements Exception {
 /// credential of its own.
 abstract interface class Transport {
   /// Response headers the client inspects.
-  static const headerNames = ['content-type', 'openmettle-api-version'];
+  static const headerNames = [
+    'content-type',
+    'openmettle-api-version',
+    'openmettle-history-available',
+  ];
 
   /// The page origin as the browser serializes it, for example
   /// `https://app.example.test`.

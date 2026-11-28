@@ -10,7 +10,7 @@ The web session increment uses Flutter and its bundled `flutter_test` package at
 
 The web screen uses Flutter's maintained Material component library, `material_ui` 1.11.1 (BSD-3-Clause), for buttons, focus handling and accessible text layout. Its additional runtime dependencies include `cupertino_ui` 1.1.7, `intl` 0.20.3 and the SDK's `flutter_localizations` (BSD-3-Clause). [Material UI](https://pub.dev/packages/material_ui/versions/1.11.1) · [Cupertino UI](https://pub.dev/packages/cupertino_ui/versions/1.1.7) · [intl](https://pub.dev/packages/intl/versions/0.20.3)
 
-The capabilities tests reuse synthetic fixtures from OpenMettle core at `6e82f3b6edcdb3f3270170195623115462316948` (MIT, OpenMettle contributors). [Core contract fixtures](https://github.com/OpenMettle/openmettle-core/tree/6e82f3b6edcdb3f3270170195623115462316948/contracts/fixtures)
+The capabilities, run replay and conversation history tests reuse synthetic fixtures from OpenMettle core at `6e82f3b6edcdb3f3270170195623115462316948` (MIT, OpenMettle contributors). [Core contract fixtures](https://github.com/OpenMettle/openmettle-core/tree/6e82f3b6edcdb3f3270170195623115462316948/contracts/fixtures)
 
 Browser qualification builds the API and migrator and reuses the Keycloak realm and Chrome test helpers from that core revision. CI uses the same digest-pinned PostgreSQL 18.1 (PostgreSQL License) and Keycloak 26.8.2 (Apache-2.0) images as core. NGINX serves the compiled app and terminates test TLS on the disposable runner. These tools are CI dependencies. [Core qualification workflow](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/.github/workflows/keycloak-qualification.yml)
 
