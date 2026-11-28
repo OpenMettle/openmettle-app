@@ -74,7 +74,7 @@ flutter pub get --enforce-lockfile
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze --no-pub
 flutter test --no-pub
-flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart
+flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart test/runs/run_replay_test.dart test/runs/run_status_view_test.dart
 flutter build web --no-pub
 ```
 
@@ -84,6 +84,18 @@ The Android CI journey installs the debug APK on a disposable Android 13 (API 33
 
 The macOS CI job runs the iOS host tests and opens the production Flutter screen on an iPhone simulator before and after relaunch. Qualify the iOS provider round trip, authenticated capabilities and logout with a provisioned device build and its associated return domain. Physical devices, production signing and site ingress remain owner qualification steps.
 
+### Try run reconnect with a fixture
+
+From the app repository, launch the standalone Flutter target in Chrome.
+
+```sh
+flutter run -d chrome --no-pub -t test/qualification/run_reconnect_app.dart
+```
+
+The fixture opens a queued run, delivers its running state, then drops the connection halfway through the cancellation event. The view shows **Reconnecting…**, resumes from the last complete event and displays **Cancelled**. A terminal run stops reconnecting. The fixture runs locally without an account or backend. The default app continues to open the session and capabilities screen.
+
+If the server rejects a cursor, the replay controller discards the previous state and fetches a fresh snapshot. It makes up to three automatic retries without new event progress. Select **Retry** to start a fresh check if recovery stops. Returning from the background checks the snapshot again before showing run data. [Core run snapshot and replay contract](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0034-ordered-events-and-replayable-sse.md)
+
 ## Boundaries
 
-The server owns permissions, approvals, quotas and run state. Chat and replayable run events are tracked in [V1-34](https://github.com/OpenMettle/openmettle-app/issues/2). See the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md), [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md) and [delivery tracker](https://github.com/OpenMettle/openmettle-core/issues/1).
+The server owns permissions, approvals, quotas and run state. Authenticated HTTP streaming and run selection in chat are tracked in [V1-34](https://github.com/OpenMettle/openmettle-app/issues/2). See the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md), [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md) and [delivery tracker](https://github.com/OpenMettle/openmettle-core/issues/1).
