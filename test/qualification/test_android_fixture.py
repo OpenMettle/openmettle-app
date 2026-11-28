@@ -32,7 +32,11 @@ class AndroidFixtureTest(unittest.TestCase):
             settings.write_text(json.dumps({'browser': {'provider_id': 'fixture-provider'}}))
             update_fixture(realm, 'realm')
             update_fixture(settings, 'settings')
-            native = json.loads(settings.read_text())['native']
+            document = json.loads(settings.read_text())
+            native = document['native']
+            key = Path(document['cursor_keys']['active']['path'])
+            self.assertEqual(key.stat().st_size, 32)
+            self.assertEqual(key.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(realm.read_text())['clients'][0]['redirectUris'],
                              [ISSUER + '/callback', native['callback']])
             self.assertEqual((native['callback'], native['redirect_uri'], native['provider_id']),

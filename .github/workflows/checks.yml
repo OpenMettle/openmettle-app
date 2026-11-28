@@ -93,6 +93,8 @@ jobs:
         run: >-
           flutter test --no-pub --platform chrome
           test/api/fetch_transport_browser_test.dart
+          test/api/run_reads_test.dart
+          test/session_screen_test.dart
           test/runs/run_replay_test.dart
           test/runs/run_status_view_test.dart
       - name: Build Flutter for the qualification origin

@@ -32,8 +32,11 @@ List<Capability> decodeCapabilitiesReply(HttpReply reply) {
 
 /// Rate limits and server or gateway failures, recognized by status alone
 /// because an intermediary may have produced them.
+const transientStatuses = {429, 500, 502, 503, 504};
+
+/// Throws [ApiFailureKind.unavailable] for one of [transientStatuses].
 void checkTransientReply(HttpReply reply) {
-  if (const {429, 500, 502, 503, 504}.contains(reply.status)) {
+  if (transientStatuses.contains(reply.status)) {
     throw ApiFailure(ApiFailureKind.unavailable, status: reply.status);
   }
 }

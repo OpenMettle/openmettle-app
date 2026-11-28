@@ -1,6 +1,7 @@
 import '../client.dart';
 import 'capabilities_reply.dart';
 import 'endpoints.dart';
+import 'http_run_client.dart';
 import 'transport.dart';
 import 'wire.dart';
 
@@ -8,6 +9,10 @@ import 'wire.dart';
 /// paths. When the origin is not HTTPS or a path is not a plain literal path
 /// (see [Endpoints.resolve]), every call fails with
 /// [ApiFailureKind.configuration] and nothing is sent.
+///
+/// A [transport] that is also a [StreamingTransport] yields a client that is
+/// a `RunReplaySource` ([HttpRunSessionClient]); a misconfigured client never
+/// is.
 SessionClient sessionClientFor(
   Transport transport, {
   required String login,
@@ -20,8 +25,9 @@ SessionClient sessionClientFor(
     session: session,
     logout: logout,
   );
-  return endpoints == null
-      ? const _Misconfigured()
+  if (endpoints == null) return const _Misconfigured();
+  return transport is StreamingTransport
+      ? HttpRunSessionClient(transport, endpoints)
       : HttpSessionClient(transport, endpoints);
 }
 
@@ -73,7 +79,7 @@ class HttpSessionClient implements SessionClient {
     } on TransportFailure {
       throw const ApiFailure(ApiFailureKind.signOutUncertain);
     }
-    if (_sameOrigin(reply, _endpoints.logout)) {
+    if (isSameOriginReply(reply, _endpoints.logout)) {
       switch (reply.status) {
         case 204:
           return;
@@ -114,13 +120,8 @@ class HttpSessionClient implements SessionClient {
     }
   }
 
-  /// A same-origin answer from [url] itself: not a redirect, opaque or
-  /// cross-origin response.
-  static bool _sameOrigin(HttpReply reply, Uri url) =>
-      reply.type == 'basic' && !reply.redirected && reply.url == url;
-
   static void _requireSameOrigin(HttpReply reply, Uri url) {
-    if (!_sameOrigin(reply, url)) badHttpReply(reply);
+    if (!isSameOriginReply(reply, url)) badHttpReply(reply);
   }
 
   /// The session routes' plain-text refusal line, or `null`.
@@ -132,6 +133,11 @@ class HttpSessionClient implements SessionClient {
     return line.contains('\n') ? null : line;
   }
 }
+
+/// A same-origin answer from [url] itself: not a redirect, opaque or
+/// cross-origin response.
+bool isSameOriginReply(HttpReply reply, Uri url) =>
+    reply.type == 'basic' && !reply.redirected && reply.url == url;
 
 class _Misconfigured implements SessionClient {
   const _Misconfigured();

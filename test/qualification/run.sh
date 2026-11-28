@@ -268,13 +268,13 @@ fi
 disclosed "$migrate_log" && fail "openmettle-migrate output disclosed a credential"
 grep -E '^schema is at migration [0-9]+$' "$migrate_log" || fail "openmettle-migrate did not report the schema"
 
-phase "provider registration and synthetic identity"
+phase "provider registration, synthetic identity and queued run"
 seed_log=$work/seed.log
-seeded=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v client_id="$client_id" \
+run_id=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v client_id="$client_id" \
   -v revision="$revision" -v subject="$subject" -f - <"$HERE/seed.psql" 2>"$seed_log") || {
   fail "qualification seed refused"
 }
-[[ $seeded == "qualification identity seeded" && ! -s $seed_log ]] ||
+[[ $run_id =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ && ! -s $seed_log ]] ||
   fail "qualification seed output unexpected"
 
 phase "first identity approval (core operator script)"
@@ -338,6 +338,7 @@ config=$(<"$HERE/nginx.conf.template")
 config=${config//@WORK@/$work}
 config=${config//@WEB@/$web}
 config=${config//@API@/$API_ADDRESS}
+config=${config//@RUN_ID@/$run_id}
 printf '%s\n' "$config" >"$work/nginx/nginx.conf"
 nginx_args=(-p "$work/nginx" -c "$work/nginx/nginx.conf" -e "$work/nginx/error.log")
 timeout 10 nginx "${nginx_args[@]}" -t -q || fail "NGINX refused the generated configuration"
@@ -402,9 +403,12 @@ rm -f -- "$work/probe.body" "$work/probe.headers"
 
 # --- Browser journey -----------------------------------------------------------------------
 phase "Flutter browser journey"
-if ! timeout 300 python3 "$HERE/journey.py" "$CORE_DIR" "$fixture" "$app_ca"; then
+if ! timeout 300 python3 "$HERE/journey.py" "$CORE_DIR" "$fixture" "$app_ca" "$run_id"; then
   fail "Flutter browser journey failed"
 fi
+# A second snapshot could also supply the terminal state. Require one successful snapshot.
+[[ $(<"$work/nginx/snapshot-status") == 200 ]] || fail "expected one HTTP 200 run snapshot"
+grep -qx 200 "$work/nginx/events-status" || fail "Flutter never opened the real run event stream"
 
 phase "server session state"
 sessions=$(owner_psql -tA -v issuer="$issuer" -v subject="$subject" -f - <<'SQL'

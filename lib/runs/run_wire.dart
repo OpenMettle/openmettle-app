@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import '../api/src/wire.dart' show isTimestamp;
+import '../api/src/wire.dart' show isCursor, isTimestamp;
 
 /// Wire decoding for core run replay (ADR 0034, ADR 0007): the `Run`
 /// snapshot and the `RunEventStream` (`text/event-stream` of `RunEventItem`s
@@ -22,9 +22,9 @@ Never _bad() => throw _invalid;
 final _uuid = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
 );
+
 final _code = RegExp(r'^[a-z][a-z0-9_]{0,63}$');
 final _type = RegExp(r'^[a-z][a-z0-9._-]{0,127}$');
-final _cursor = RegExp(r'^[A-Za-z0-9_-]{1,512}$');
 final _sequenceText = RegExp(r'^[1-9][0-9]{0,18}$');
 final _retry = RegExp(r'^(?:0|[1-9][0-9]{0,5})$');
 final _maxSequence = BigInt.parse('9223372036854775807');
@@ -63,8 +63,11 @@ const _emptyData = {
 /// Version 1 types whose `data` is exactly `{"reason": Code}`.
 const _reasonData = {'run.cancelled', 'run.failed'};
 
+bool isCanonicalRunId(String value) =>
+    value.length == 36 && _uuid.hasMatch(value);
+
 void _requireUuid(String runId) {
-  if (!_uuid.hasMatch(runId)) {
+  if (!isCanonicalRunId(runId)) {
     throw ArgumentError('runId must be a canonical lowercase UUID');
   }
 }
@@ -77,7 +80,7 @@ BigInt _sequence(Object? value) {
 }
 
 String _cursorValue(Object? value) {
-  if (value is! String || !_cursor.hasMatch(value)) _bad();
+  if (value is! String || !isCursor(value)) _bad();
   return value;
 }
 
