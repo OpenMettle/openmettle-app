@@ -1,0 +1,40 @@
+# Unmodified copies of OpenMettle core consumer fixtures (synthetic, generated
+# by core scripts/contract_fixtures.py; MIT, OpenMettle core). Do not edit.
+# Source: https://github.com/OpenMettle/openmettle-core contracts/fixtures/<path>
+# Reproduce or verify from a core checkout:
+#   for f in $(grep -v '^#' MANIFEST | tail -n +2); do
+#     git -C <core> show "$(grep -v '^#' MANIFEST | head -1):contracts/fixtures/$f" | cmp - "$f"
+#   done
+6e82f3b6edcdb3f3270170195623115462316948
+compat/ApiVersionCurrent--newer-minor.json
+compat/CapabilitiesCoreOnly--auto-unknown-root-field.json
+compat/CapabilitiesMixed--auto-unknown-root-field.json
+compat/CapabilitiesMixed--nested-unknown-field.json
+compat/CapabilitiesMixed--unrecognized-kind.json
+compat/CapabilitiesMixed--unrecognized-readiness-state.json
+compat/ProblemUnauthenticated--auto-unknown-root-field.json
+invalid/ApiVersionCurrent--leading-zero-minor.json
+invalid/ApiVersionCurrent--major-only.json
+invalid/ApiVersionCurrent--unsupported-major.json
+invalid/CapabilitiesCoreOnly--auto-missing-capabilities.json
+invalid/CapabilitiesCoreOnly--auto-missing-generated_at.json
+invalid/CapabilitiesCoreOnly--capabilities-null.json
+invalid/CapabilitiesMixed--absent-with-readiness.json
+invalid/CapabilitiesMixed--authorization-missing.json
+invalid/CapabilitiesMixed--authorization-not-boolean.json
+invalid/CapabilitiesMixed--auto-missing-capabilities.json
+invalid/CapabilitiesMixed--auto-missing-generated_at.json
+invalid/CapabilitiesMixed--capability-id-uppercase.json
+invalid/CapabilitiesMixed--installed-not-boolean.json
+invalid/CapabilitiesMixed--installed-without-readiness.json
+invalid/CapabilitiesMixed--observed-at-without-microseconds.json
+invalid/CapabilitiesMixed--unavailable-without-observation.json
+invalid/ProblemUnauthenticated--auto-missing-code.json
+invalid/ProblemUnauthenticated--auto-missing-request_id.json
+invalid/ProblemUnauthenticated--auto-missing-status.json
+invalid/ProblemUnauthenticated--auto-missing-title.json
+invalid/ProblemUnauthenticated--auto-missing-type.json
+valid/ApiVersionCurrent.json
+valid/CapabilitiesCoreOnly.json
+valid/CapabilitiesMixed.json
+valid/ProblemUnauthenticated.json

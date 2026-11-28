@@ -1,24 +1,42 @@
 # OpenMettle app
 
-Flutter web/mobile presentation layer for the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md). **Bootstrap only:** the entry point displays the product name. There is no login, API client, conversation UI or client persistence yet. Flutter implementation remains step 2, tracked by V1-33 through V1-35.
+The Flutter web client checks the browser session and displays the capabilities visible to that session. The server reports installation, authorization and readiness separately. A signed-in user can receive an empty list on a core-only installation. This is the first web increment of [V1-33](https://github.com/OpenMettle/openmettle-app/issues/1).
+
+## Connect the web client
+
+Serve the built app and the Rust API on the same HTTPS origin. Route the configured sign-in, callback, session check, logout and `/v1/*` paths to the API. Serve the app at the browser profile's landing path so a successful sign-in returns the user to Flutter. Enable the server's browser authentication profile first. See the [core browser routing profile](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0020-browser-routing-profile.md).
+
+Set the three public paths at build time to match that profile. This example uses synthetic paths.
+
+```sh
+flutter build web --no-pub \
+  --dart-define=OPENMETTLE_LOGIN_PATH=/auth/login \
+  --dart-define=OPENMETTLE_SESSION_PATH=/auth/session \
+  --dart-define=OPENMETTLE_LOGOUT_PATH=/auth/logout
+```
+
+Sign-in submits a form to the API. The API handles the provider callback and sets the secure HttpOnly session cookie. The browser sends the cookie with same-origin requests. Keep credentials out of build settings and browser storage.
+
+Serve the Flutter HTML page with `Referrer-Policy: same-origin`. With `no-referrer` on that page, a browser can send `Origin: null` on the sign-in form and core will reject it. The API supplies its own referrer policy on authentication responses. [Core sign-in page requirements](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0017-browser-login-handoff.md#L213-L214)
+
+If sign-in does not open, select **Check session** to recover. If the session has expired, sign in again. If the service is unavailable, retry after it recovers. If logout cannot be confirmed, retry sign-out before leaving a shared browser.
 
 ## Development
 
-Install Flutter **3.50.0** from the [official SDK archive](https://docs.flutter.dev/install/archive); the pin is recorded in `.flutter-version`. Use the Dart SDK bundled with Flutter.
+Use Flutter **3.50.0** and its bundled Dart SDK. The version is recorded in `.flutter-version`. [Flutter SDK archive](https://docs.flutter.dev/install/archive)
 
 ```sh
 python3 scripts/check_repository.py
-flutter pub get
-dart format --output=none --set-exit-if-changed lib
-flutter analyze
-flutter build web
-flutter run -d chrome
+flutter pub get --enforce-lockfile
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --no-pub
+flutter test --no-pub
+flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart
+flutter build web --no-pub
 ```
 
-Commit the generated `pubspec.lock` once dependency resolution has been verified with the pinned SDK; no guessed package checksums are supplied by this bootstrap. CI checks formatting, analysis and the web build. Add behavioral tests with the first real client behavior.
-
-Web entry files are present. Generate Android/iOS platform shells with the pinned Flutter CLI during V1-33 after choosing the application identifier and signing approach; do not hand-author signing configuration or commit private keys. iOS qualification requires macOS/Xcode. This bootstrap does not claim mobile builds are qualified.
+Client tests use synthetic responses and pinned core contract fixtures. A real identity-provider journey through this Flutter app and Android/iOS sign-in require separate qualification. Choose application identifiers and signing settings before generating the native platform shells.
 
 ## Boundaries
 
-Consume the core versioned APIs and replayable events. Permissions, approvals, quotas and run state remain server-authoritative. Backend delivery must not depend on this client. Keep production credentials out of compile-time configuration and browser storage. See [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md), and the [delivery tracker](https://github.com/orgs/OpenMettle/projects/1/views/1?filterQuery=%5BV1-00%5D&pane=issue&itemId=307308630).
+The server owns permissions, approvals, quotas and run state. Chat and replayable run events are tracked in [V1-34](https://github.com/OpenMettle/openmettle-app/issues/2). See the [accepted architecture](https://github.com/OpenMettle/openmettle-core/blob/main/ARCHITECTURE-v1.md), [repository boundaries](REPOSITORIES.md), [provenance](UPSTREAM.md) and [delivery tracker](https://github.com/OpenMettle/openmettle-core/issues/1).

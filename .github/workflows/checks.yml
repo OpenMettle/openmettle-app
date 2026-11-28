@@ -23,7 +23,7 @@ jobs:
         run: python3 scripts/check_repository.py
 
   flutter:
-    name: Flutter web bootstrap
+    name: Flutter web client
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -37,7 +37,9 @@ jobs:
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = ab2912035e160d9cad6306df307576da6128ebdb
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
-      - run: flutter pub get
-      - run: dart format --output=none --set-exit-if-changed lib
-      - run: flutter analyze
-      - run: flutter build web
+      - run: flutter pub get --enforce-lockfile
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart
+      - run: flutter build web --no-pub

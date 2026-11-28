@@ -5,3 +5,9 @@ Repository hygiene, editor/attribute defaults and the MIT licence originate from
 The new Rust/Flutter scaffolding and repository documentation were authored for OpenMettle. No Open WebUI implementation, model weights, curated fork sources or runtime images are imported here. MIT covers original repository material and the retained starter; linked third-party materials keep their own terms.
 
 Before adding dependencies or distributing images, complete the version-specific provenance and notices inventory in V1-42. A repository licence does not clear all later runtime dependencies.
+
+The web session increment uses Flutter and its bundled `flutter_test` package at 3.50.0 (`ab2912035e160d9cad6306df307576da6128ebdb`, BSD-3-Clause). The latter is a development dependency. The lockfile records resolved packages and registry checksums. [Flutter source and licence](https://github.com/flutter/flutter/tree/ab2912035e160d9cad6306df307576da6128ebdb)
+
+The web screen uses Flutter's maintained Material component library, `material_ui` 1.11.1 (BSD-3-Clause), for buttons, focus handling and accessible text layout. Its additional runtime dependencies include `cupertino_ui` 1.1.7, `intl` 0.20.3 and the SDK's `flutter_localizations` (BSD-3-Clause). [Material UI](https://pub.dev/packages/material_ui/versions/1.11.1) · [Cupertino UI](https://pub.dev/packages/cupertino_ui/versions/1.1.7) · [intl](https://pub.dev/packages/intl/versions/0.20.3)
+
+The capabilities tests reuse synthetic fixtures from OpenMettle core at `6e82f3b6edcdb3f3270170195623115462316948` (MIT, OpenMettle contributors). [Core contract fixtures](https://github.com/OpenMettle/openmettle-core/tree/6e82f3b6edcdb3f3270170195623115462316948/contracts/fixtures)
