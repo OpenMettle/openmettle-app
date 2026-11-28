@@ -181,11 +181,10 @@ python3 "$CORE_DIR/tests/keycloak/fixture.py" prepare --directory "$fixture" ||
   fail "core Keycloak fixture prepare failed"
 
 phase "isolated provider network and container"
-provider_network=openmettle-app-qualification-$suffix
-timeout 30 docker network create --internal "$provider_network" >/dev/null ||
+network_name=openmettle-app-qualification-$suffix
+provider_network=$(timeout 30 docker network create --internal "$network_name") ||
   fail "internal provider network not created"
-provider_container=openmettle-app-keycloak-$suffix
-timeout 60 docker run --detach --name "$provider_container" \
+provider_container=$(timeout 60 docker create \
   --network "$provider_network" \
   --log-driver none \
   --cap-drop ALL --security-opt no-new-privileges \
@@ -200,10 +199,11 @@ timeout 60 docker run --detach --name "$provider_container" \
   --https-certificate-file=/etc/keycloak-tls/tls-certificate.pem \
   --https-certificate-key-file=/etc/keycloak-tls/tls-key.pem \
   --hostname="https://$PROVIDER_HOST:8443" \
-  --import-realm >/dev/null || fail "Keycloak container did not start"
+  --import-realm) || fail "Keycloak container not created"
+timeout 60 docker start "$provider_container" >/dev/null || fail "Keycloak container did not start"
 
 phase "provider name and auth settings"
-address=$(docker inspect --format "{{with index .NetworkSettings.Networks \"$provider_network\"}}{{.IPAddress}}{{end}}" "$provider_container")
+address=$(docker inspect --format "{{with index .NetworkSettings.Networks \"$network_name\"}}{{.IPAddress}}{{end}}" "$provider_container")
 [[ $address =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || fail "provider container has no network address"
 getent hosts "$PROVIDER_HOST" >/dev/null && fail "$PROVIDER_HOST already resolves on this runner"
 printf '%s %s\n' "$address" "$PROVIDER_HOST" | sudo -n tee -a /etc/hosts >/dev/null ||

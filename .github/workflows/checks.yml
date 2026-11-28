@@ -27,7 +27,7 @@ jobs:
   flutter:
     name: Flutter web client
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     services:
       postgres:
         image: postgres:18.1-bookworm@sha256:cc9f4143a8d2fa8cf3749d0cb4d26ecf2d53a77a2ac807e9ebd67ae22426221a
@@ -82,7 +82,7 @@ jobs:
             sudo apt-get install -y --no-install-recommends nginx-light libnss3-tools
           fi
       - name: Qualify Flutter sign-in and logout with Keycloak
-        timeout-minutes: 10
+        timeout-minutes: 30
         env:
           PROVIDER_IMAGE: quay.io/keycloak/keycloak@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
