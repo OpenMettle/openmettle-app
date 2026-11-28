@@ -38,6 +38,32 @@ On the App Link host, serve `/.well-known/assetlinks.json` over trusted HTTPS. A
 
 Tap **Sign in**. Android opens the system browser for confirmation and provider sign-in. The verified link returns to Flutter, which exchanges the one-use code and its PKCE verifier for an OpenMettle session. Android Keystore protects the saved attempt and session. After restarting the app, Flutter checks the saved session before displaying capabilities. If sign-in expires, start a new attempt. If sign-out cannot be confirmed, select **Retry sign out** when the API is reachable. Release signing and association with a production domain require the owner's release identity.
 
+## Connect an iOS build
+
+Use iOS 17.4 or later. Register the iOS client in the deployment's native profile. Use the API origin as the issuer and a dedicated HTTPS host and path for the return to the app. The provider redirects to the API's upstream callback. The API redirects to the app's registered return URL after sign-in. [Core native registration](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0023-native-sign-in.md)
+
+Build the simulator app with Flutter 3.50.0 and Xcode on macOS. Supply all three public settings together. The shared Runner scheme derives the associated domain from the redirect host. These values illustrate a test registration.
+
+```sh
+flutter pub get --enforce-lockfile
+flutter build ios --simulator --debug --no-pub \
+  --dart-define=OPENMETTLE_NATIVE_ISSUER=https://app.relying.test:18443 \
+  --dart-define=OPENMETTLE_NATIVE_CLIENT_ID=synthetic.ios \
+  --dart-define=OPENMETTLE_NATIVE_REDIRECT_URI=https://return.relying.test/native/complete
+```
+
+For a signed device build, enable **Associated Domains** for the App ID and use a provisioning profile that includes the capability. Debug uses bundle ID `org.openmettle.app.debug`, profile uses `org.openmettle.app.profile`, and release uses `org.openmettle.app`. Keep development associations on a test host.
+
+Apple's system authentication session requires the `webcredentials` association for the HTTPS callback host. Serve `/.well-known/apple-app-site-association` from that host over trusted HTTPS without redirects. Replace the example identifier with the exact `application-identifier` from the signed build, including its App ID prefix. Apple's associated-domains service must be able to fetch the file for a standard device deployment. [Apple HTTPS callback](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession/callback/https(host:path:)) · [Apple associated domains](https://developer.apple.com/documentation/xcode/supporting-associated-domains)
+
+```json
+{"webcredentials":{"apps":["EXAMPLE123.org.openmettle.app.debug"]}}
+```
+
+On the signed device, tap **Sign in**, confirm the system prompt, and complete provider sign-in. On return, check the capabilities screen and reopen the app to verify the saved session. The app stores the attempt and session in this device's Keychain. Unlock the device if storage is unavailable. If the app closes during browser sign-in, start a new attempt.
+
+Sign out while connected and confirm that the app stays signed out after reopening. An interrupted logout offers **Retry sign out**. On a shared device, confirm sign-out before removing the app so the API revokes the session. A fresh installation discards credentials left in Keychain by an earlier installation.
+
 ## Development
 
 Use Flutter **3.50.0** and its bundled Dart SDK. The version is recorded in `.flutter-version`. [Flutter SDK archive](https://docs.flutter.dev/install/archive)
@@ -54,7 +80,9 @@ flutter build web --no-pub
 
 Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload, signs out and reloads again. The job uses per-run trust and synthetic identities.
 
-The Android CI journey installs the debug APK on a disposable Android 13 (API 33) AOSP emulator. Android's StatementService fetches the association from the private test host. The journey checks Android's verification result, drives the installed Chromium browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator. iOS, physical devices, production App Link ownership and site ingress need separate qualification.
+The Android CI journey installs the debug APK on a disposable Android 13 (API 33) AOSP emulator. Android's StatementService fetches the association from the private test host. The journey checks Android's verification result, drives the installed Chromium browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator.
+
+The macOS CI job runs the iOS host tests and opens the production Flutter screen on an iPhone simulator before and after relaunch. Qualify the iOS provider round trip, authenticated capabilities and logout with a provisioned device build and its associated return domain. Physical devices, production signing and site ingress remain owner qualification steps.
 
 ## Boundaries
 

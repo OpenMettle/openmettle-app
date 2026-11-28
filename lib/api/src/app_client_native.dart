@@ -9,8 +9,8 @@ import 'native_profile.dart';
 import 'native_session_client.dart';
 
 SessionClient createAppClient() {
-  if (!Platform.isAndroid) {
-    throw UnsupportedError('OpenMettle sign-in requires web or Android.');
+  if (!Platform.isAndroid && !Platform.isIOS) {
+    throw UnsupportedError('OpenMettle sign-in requires web, Android or iOS.');
   }
   final profile = NativeProfile.parse(
     const String.fromEnvironment('OPENMETTLE_NATIVE_ISSUER'),
@@ -19,13 +19,13 @@ SessionClient createAppClient() {
   );
   return NativeSessionClient(
     profile,
-    _AndroidAuth(),
+    _ChannelAuth(),
     const NativeHttpTransport(),
   );
 }
 
-class _AndroidAuth implements NativeAuthPlatform {
-  _AndroidAuth() {
+class _ChannelAuth implements NativeAuthPlatform {
+  _ChannelAuth() {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'linkAvailable') _links.add(null);
     });

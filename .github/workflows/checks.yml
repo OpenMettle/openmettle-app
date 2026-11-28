@@ -23,7 +23,38 @@ jobs:
         run: python3 scripts/check_repository.py
       - name: Test browser qualification inputs
         run: python3 -m unittest discover -s test/qualification
+      - name: Test iOS registration and associated-domain generation
+        run: python3 -m unittest discover -s ios/Flutter
 
+  ios:
+    name: iOS simulator
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Set up pinned Flutter
+        run: |
+          git clone --depth 1 --branch 3.50.0 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = ab2912035e160d9cad6306df307576da6128ebdb
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - run: flutter pub get --enforce-lockfile
+      - name: Configure the debug simulator build
+        run: >-
+          flutter build ios --simulator --debug --config-only --no-pub
+          --dart-define=OPENMETTLE_NATIVE_ISSUER=https://app.relying.test:18443
+          --dart-define=OPENMETTLE_NATIVE_CLIENT_ID=synthetic.ios
+          --dart-define=OPENMETTLE_NATIVE_REDIRECT_URI=https://return.relying.test/native/complete
+      - name: Test the iOS host and Flutter launch
+        run: |
+          xcodebuild test -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -only-testing:RunnerTests -only-testing:RunnerUITests \
+            -derivedDataPath "$RUNNER_TEMP/ios-build" \
+            -parallel-testing-enabled NO -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
+      - name: Check the packaged simulator registration and HTTPS callback entitlement
+        run: bash test/qualification/ios_simulator_bundle.sh "$RUNNER_TEMP/ios-build/Build/Products/Debug-iphonesimulator/Runner.app"
   flutter:
     name: Flutter web client
     runs-on: ubuntu-24.04
