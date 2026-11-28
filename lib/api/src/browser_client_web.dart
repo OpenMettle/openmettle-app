@@ -26,3 +26,5 @@ SessionClient createBrowserClient() => sessionClientFor(
   session: _sessionPath,
   logout: _logoutPath,
 );
+
+SessionClient createAppClient() => createBrowserClient();

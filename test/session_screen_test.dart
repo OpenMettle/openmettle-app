@@ -29,7 +29,8 @@ const _unrecognized = Capability(
 
 class _FakeSessionClient implements SessionClient {
   Future<bool> Function() session = () async => true;
-  Future<void> Function() login = () async {};
+  Future<SignInResult> Function() login = () async =>
+      SignInResult.browserOpened;
   Future<void> Function() logout = () async {};
   Future<List<Capability>> Function() inventory = () async => [_installed];
   final calls = <String>[];
@@ -41,7 +42,7 @@ class _FakeSessionClient implements SessionClient {
   }
 
   @override
-  Future<void> signIn() {
+  Future<SignInResult> signIn() {
     calls.add('login');
     return login();
   }
@@ -59,6 +60,13 @@ class _FakeSessionClient implements SessionClient {
   }
 }
 
+class _NativeClient extends _FakeSessionClient implements SessionUpdates {
+  final links = StreamController<void>.broadcast();
+
+  @override
+  Stream<void> get sessionUpdates => links.stream;
+}
+
 void _visibility(WidgetTester tester, {required bool visible}) {
   tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
   tester.binding.handleAppLifecycleStateChanged(
@@ -72,7 +80,7 @@ void main() {
   ) async {
     final semantics = tester.ensureSemantics();
     final session = Completer<bool>();
-    final login = Completer<void>();
+    final login = Completer<SignInResult>();
     final client = _FakeSessionClient();
     client.session = () => session.future;
     client.login = () => login.future;
@@ -130,6 +138,88 @@ void main() {
     expect(find.text('Signed in'), findsOneWidget);
     expect(find.text('No capabilities were reported.'), findsOneWidget);
     expect(client.calls, ['session', 'login', 'session', 'capabilities']);
+  });
+
+  testWidgets('loads a cold session and rechecks resumed and warm links', (
+    tester,
+  ) async {
+    final client = _NativeClient();
+    addTearDown(client.links.close);
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    expect(find.text(_installed.id), findsOneWidget);
+
+    client.session = () async => false;
+    _visibility(tester, visible: false);
+    _visibility(tester, visible: true);
+    await tester.pumpAndSettle();
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text(_installed.id), findsNothing);
+
+    // Resume can run before the new intent arrives.
+    client.session = () async => true;
+    client.links.add(null);
+    await tester.pumpAndSettle();
+    expect(find.text(_installed.id), findsOneWidget);
+    expect(client.calls, [
+      'session',
+      'capabilities',
+      'session',
+      'session',
+      'capabilities',
+    ]);
+  });
+
+  testWidgets('loads a session that arrives just before sign-in', (
+    tester,
+  ) async {
+    final client = _NativeClient()..session = () async => false;
+    addTearDown(client.links.close);
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    client.login = () async => SignInResult.sessionPresent;
+    client.session = () async => true;
+    await tester.tap(find.text('Sign in'));
+    await tester.pumpAndSettle();
+    expect(find.text(_installed.id), findsOneWidget);
+  });
+
+  testWidgets('a callback signal during logout does not reopen the session', (
+    tester,
+  ) async {
+    final pending = Completer<void>();
+    final client = _NativeClient()..logout = () => pending.future;
+    addTearDown(client.links.close);
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sign out'));
+    client.links.add(null);
+    await tester.pump();
+    pending.complete();
+    await tester.pumpAndSettle();
+    expect(client.calls, ['session', 'capabilities', 'logout']);
+    expect(find.text('Signed out'), findsOneWidget);
+  });
+
+  testWidgets('offers logout retry after restarting with uncertain logout', (
+    tester,
+  ) async {
+    final client = _NativeClient()
+      ..session = () async =>
+          throw const ApiFailure(ApiFailureKind.signOutUncertain);
+    addTearDown(client.links.close);
+    await tester.pumpWidget(OpenMettleApp(client: client));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not confirm sign-out.'), findsOneWidget);
+    expect(find.text('Sign in'), findsNothing);
+
+    client.links.add(null);
+    await tester.pumpAndSettle();
+    expect(client.calls, ['session']);
+    await tester.tap(find.text('Retry sign out'));
+    await tester.pumpAndSettle();
+    expect(find.text('Signed out'), findsOneWidget);
+    expect(client.calls, ['session', 'logout']);
   });
 
   testWidgets('recovers when sign-in navigation never leaves the page', (

@@ -1,37 +1,41 @@
 /// Session and capability seam between the UI and the core application API.
 ///
-/// The UI depends only on this file. The browser implementation lives behind
-/// `browser_client.dart`; tests substitute their own [SessionClient].
+/// The session screen uses this interface across browser and Android clients.
+/// Tests can substitute their own [SessionClient].
 library;
 
-/// The browser session and the read-only capability inventory.
+/// The application session and the read-only capability inventory.
 ///
-/// Every method fails with [SessionExpired] when the server refuses the
-/// session, or with [ApiFailure] for every other unsuccessful outcome. No
-/// method returns a default or demonstration value instead of failing.
+/// [SessionExpired] indicates a definite session refusal. [ApiFailure]
+/// reports configuration, transport and protocol failures.
 abstract interface class SessionClient {
-  /// Whether the browser holds a session the server currently accepts.
+  /// Whether this client holds a session the server currently accepts.
   ///
-  /// Returns `false` only when the server says the session is not valid.
+  /// Returns `false` when no credential is available or the server refuses it.
   /// Throws [ApiFailure] when the answer is unknown.
   Future<bool> checkSession();
 
-  /// Starts sign-in by navigating the page to the server's login route.
-  ///
-  /// On success the page unloads; the returned future completes once the
-  /// navigation has been requested.
-  Future<void> signIn();
+  /// Requests browser sign-in, or reports a session that arrived first.
+  Future<SignInResult> signIn();
 
   /// Ends the presented session.
   ///
-  /// Completes only after the server acknowledged the revocation. Throws
-  /// [SessionExpired] when the server says the session was already not valid,
-  /// and [ApiFailure] with [ApiFailureKind.signOutUncertain] when the
-  /// revocation may or may not have happened; retrying is safe.
+  /// For a presented credential, waits for the server to acknowledge
+  /// revocation. Throws [SessionExpired] after a definite refusal and
+  /// [ApiFailure] with [ApiFailureKind.signOutUncertain] when the outcome
+  /// is unknown and sign-out can be retried.
   Future<void> signOut();
 
   /// Capabilities visible to the signed-in caller (`GET /v1/capabilities`).
   Future<List<Capability>> capabilities();
+}
+
+enum SignInResult { browserOpened, sessionPresent }
+
+/// A native handoff can arrive independently of the current screen or
+/// lifecycle transition. The app rechecks on each signal and on foregrounding.
+abstract interface class SessionUpdates {
+  Stream<void> get sessionUpdates;
 }
 
 /// One capability with independent dimensions, as reported by the server.

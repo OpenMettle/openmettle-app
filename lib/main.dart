@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
-import 'api/browser_client.dart';
+import 'api/app_client.dart';
 import 'api/client.dart';
 
 void main() {
-  runApp(OpenMettleApp(client: createBrowserClient()));
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(OpenMettleApp(client: createAppClient()));
 }
 
 class OpenMettleApp extends StatelessWidget {
@@ -49,6 +52,8 @@ class _SessionScreenState extends State<_SessionScreen> {
   final _primaryFocus = FocusNode();
   final _signOutFocus = FocusNode();
   late final AppLifecycleListener _lifecycle;
+  StreamSubscription<void>? _updates;
+  bool _hidden = false;
   _Phase _phase = _Phase.checking;
   int _request = 0;
   bool _recheckOnShow = false;
@@ -57,14 +62,28 @@ class _SessionScreenState extends State<_SessionScreen> {
   @override
   void initState() {
     super.initState();
-    _lifecycle = AppLifecycleListener(onHide: _hide, onShow: _resume);
-    _recheckOnShow =
-        WidgetsBinding.instance.lifecycleState == AppLifecycleState.hidden;
-    if (!_recheckOnShow) _load();
+    final client = widget.client;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _hidden =
+        lifecycle == AppLifecycleState.hidden ||
+        lifecycle == AppLifecycleState.paused;
+    _lifecycle = AppLifecycleListener(
+      onHide: _hide,
+      onShow: _resume,
+      onResume: client is SessionUpdates ? _nativeRecheck : null,
+    );
+    if (client is SessionUpdates) {
+      _updates = (client as SessionUpdates).sessionUpdates.listen((_) {
+        _nativeRecheck();
+      });
+    }
+    _recheckOnShow = _hidden;
+    if (!_hidden) _load();
   }
 
   @override
   void dispose() {
+    _updates?.cancel();
     _lifecycle.dispose();
     _primaryFocus.dispose();
     _signOutFocus.dispose();
@@ -72,6 +91,7 @@ class _SessionScreenState extends State<_SessionScreen> {
   }
 
   void _hide() {
+    _hidden = true;
     switch (_phase) {
       case _Phase.checking:
       case _Phase.loading:
@@ -88,9 +108,19 @@ class _SessionScreenState extends State<_SessionScreen> {
   }
 
   void _resume() {
+    _hidden = false;
+    if (widget.client is SessionUpdates) return;
     if (!_recheckOnShow) return;
     _recheckOnShow = false;
     _load();
+  }
+
+  void _nativeRecheck() {
+    if (!_hidden &&
+        _phase != _Phase.signingOut &&
+        _phase != _Phase.signOutFailed) {
+      _load();
+    }
   }
 
   bool get _canSignOut =>
@@ -145,10 +175,12 @@ class _SessionScreenState extends State<_SessionScreen> {
       }
     } on SessionExpired {
       if (_isCurrent(request)) _show(_Phase.signedOut);
-    } catch (_) {
+    } catch (error) {
       if (_isCurrent(request)) {
         _show(
-          _phase == _Phase.loading
+          error is ApiFailure && error.kind == ApiFailureKind.signOutUncertain
+              ? _Phase.signOutFailed
+              : _phase == _Phase.loading
               ? _Phase.capabilitiesUnavailable
               : _Phase.sessionUnavailable,
         );
@@ -168,7 +200,10 @@ class _SessionScreenState extends State<_SessionScreen> {
     final restoreFocus = _primaryFocus.hasFocus;
     _show(_Phase.signingIn);
     try {
-      await widget.client.signIn();
+      final result = await widget.client.signIn();
+      if (result == SignInResult.sessionPresent && _isCurrent(request)) {
+        await _load();
+      }
     } catch (_) {
       if (_isCurrent(request)) {
         _show(_Phase.signInFailed);

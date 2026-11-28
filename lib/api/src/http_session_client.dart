@@ -1,4 +1,5 @@
 import '../client.dart';
+import 'capabilities_reply.dart';
 import 'endpoints.dart';
 import 'transport.dart';
 import 'wire.dart';
@@ -42,7 +43,7 @@ class HttpSessionClient implements SessionClient {
     _requireSameOrigin(reply, _endpoints.session);
     switch (reply.status) {
       case 204:
-        if (reply.body.isNotEmpty) _bad(reply);
+        if (reply.body.isNotEmpty) badHttpReply(reply);
         return true;
       case 403:
         switch (_fixedLine(reply)) {
@@ -51,16 +52,17 @@ class HttpSessionClient implements SessionClient {
           case 'session origin refused':
             throw ApiFailure(ApiFailureKind.originRefused, status: 403);
         }
-        _bad(reply);
+        badHttpReply(reply);
       default:
-        _transient(reply);
-        _bad(reply);
+        checkTransientReply(reply);
+        badHttpReply(reply);
     }
   }
 
   @override
-  Future<void> signIn() async {
+  Future<SignInResult> signIn() async {
     _transport.submitForm(_endpoints.login);
+    return SignInResult.browserOpened;
   }
 
   @override
@@ -100,30 +102,7 @@ class HttpSessionClient implements SessionClient {
     final url = _endpoints.capabilities;
     final reply = await _read(url, accept: 'application/json');
     _requireSameOrigin(reply, url);
-    final status = reply.status;
-    final version = reply.headers['openmettle-api-version'];
-    if (version != null) checkApiVersion(version, status: status);
-    switch (status) {
-      case 200:
-        if (version == null ||
-            !hasMediaType(reply.headers['content-type'], 'application/json')) {
-          _bad(reply);
-        }
-        return decodeCapabilityList(reply.body, status: status);
-      case 401:
-        if (version == null ||
-            !hasMediaType(
-              reply.headers['content-type'],
-              'application/problem+json',
-            ) ||
-            decodeProblemCode(reply.body, status) != 'unauthenticated') {
-          _bad(reply);
-        }
-        throw const SessionExpired();
-      default:
-        _transient(reply);
-        _bad(reply);
-    }
+    return decodeCapabilitiesReply(reply);
   }
 
   /// A safe `GET`: no answer means the result is unknown, not refused.
@@ -135,26 +114,13 @@ class HttpSessionClient implements SessionClient {
     }
   }
 
-  /// Rate limits and server or gateway failures, recognized by status alone
-  /// because an intermediary may have produced them.
-  static void _transient(HttpReply reply) {
-    if (const {429, 500, 502, 503, 504}.contains(reply.status)) {
-      throw ApiFailure(ApiFailureKind.unavailable, status: reply.status);
-    }
-  }
-
-  static Never _bad(HttpReply reply) => throw ApiFailure(
-    ApiFailureKind.badResponse,
-    status: reply.status == 0 ? null : reply.status,
-  );
-
   /// A same-origin answer from [url] itself: not a redirect, opaque or
   /// cross-origin response.
   static bool _sameOrigin(HttpReply reply, Uri url) =>
       reply.type == 'basic' && !reply.redirected && reply.url == url;
 
   static void _requireSameOrigin(HttpReply reply, Uri url) {
-    if (!_sameOrigin(reply, url)) _bad(reply);
+    if (!_sameOrigin(reply, url)) badHttpReply(reply);
   }
 
   /// The session routes' plain-text refusal line, or `null`.
@@ -176,7 +142,7 @@ class _Misconfigured implements SessionClient {
   Future<bool> checkSession() async => _fail();
 
   @override
-  Future<void> signIn() async => _fail();
+  Future<SignInResult> signIn() async => _fail();
 
   @override
   Future<void> signOut() async => _fail();
