@@ -54,7 +54,7 @@ flutter build web --no-pub
 
 Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload, signs out and reloads again. The job uses per-run trust and synthetic identities.
 
-The Android CI journey installs the debug APK on a disposable Android 12 (API 31) emulator. It checks Android's domain-verification result, drives the system browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator. iOS, physical devices, production App Link ownership and site ingress need separate qualification.
+The Android CI journey installs the debug APK on a disposable Android 13 (API 33) emulator. It checks Android's domain-verification result, drives the system browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator. iOS, physical devices, production App Link ownership and site ingress need separate qualification.
 
 ## Boundaries
 

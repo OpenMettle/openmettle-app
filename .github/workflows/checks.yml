@@ -89,7 +89,7 @@ jobs:
           cp build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/openmettle-debug.apk"
           cd android
           ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug
-      - name: Start the Android API 31 emulator
+      - name: Start the Android API 33 emulator
         timeout-minutes: 18
         run: bash test/qualification/emulator.sh
       - name: Install qualification tools

@@ -2,7 +2,7 @@
 # Called inside run.sh after the per-run fixture and HTTPS servers are ready.
 set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && ${RUNNER_ENVIRONMENT:-} == github-hosted &&
-   ${ANDROID_SERIAL:-} == emulator-5554 && $(adb shell getprop ro.build.version.sdk) == 31 ]]
+   ${ANDROID_SERIAL:-} == emulator-5554 && $(adb shell getprop ro.build.version.sdk) == 33 ]]
 app_ca=$1 provider_ca=$2 provider_ip=$3 apk=$4
 package=org.openmettle.app.debug
 [[ $(adb shell id -u) == 0 && $provider_ip =~ ^[0-9]+(\.[0-9]+){3}$ ]]
