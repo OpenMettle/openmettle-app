@@ -1,6 +1,7 @@
 """Add the exact Android registration to the private core CI fixture."""
+import base64
+import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -30,17 +31,26 @@ def update_fixture(path, stage):
     path.write_text(json.dumps(document), encoding="utf-8")
 
 
-def association(fingerprint):
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", fingerprint):
-        raise ValueError("invalid signing certificate fingerprint")
+def association(signer_report):
+    # apksigner verifies the APK before printing its public certificate. The
+    # surrounding signer labels differ across Android Build Tools versions.
+    lines = signer_report.splitlines()
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+    if lines.count(begin) != 1 or lines.count(end) != 1:
+        raise ValueError("expected one APK signing certificate")
+    encoded = "".join(lines[lines.index(begin) + 1:lines.index(end)])
+    if not encoded:
+        raise ValueError("empty APK signing certificate")
+    certificate = base64.b64decode(encoded, validate=True)
+    fingerprint = hashlib.sha256(certificate).digest().hex(":").upper()
     return [{"relation": ["delegate_permission/common.handle_all_urls"], "target": {
         "namespace": "android_app", "package_name": APP_ID,
-        "sha256_cert_fingerprints": [":".join(re.findall("..", fingerprint.upper()))],
+        "sha256_cert_fingerprints": [fingerprint],
     }}]
 
 
 if __name__ == "__main__":
     if sys.argv[1] == "assetlinks":
-        print(json.dumps(association(sys.argv[2])))
+        print(json.dumps(association(sys.stdin.read())))
     else:
         update_fixture(Path(sys.argv[2]), sys.argv[1])

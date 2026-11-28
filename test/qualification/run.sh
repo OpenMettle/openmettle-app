@@ -327,8 +327,10 @@ rm -f -- "$tls/ca-key.pem" "$tls/leaf.csr" "$tls/openssl.cnf"
 phase "Android debug APK signing association"
 signer=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
 [[ -x $signer && -f $APP_APK ]] || fail "Android APK or signer tool missing"
-fingerprint=$("$signer" verify --print-certs "$APP_APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-python3 "$HERE/android_fixture.py" assetlinks "$fingerprint" >"$work/assetlinks.json"
+if ! "$signer" verify --print-certs-pem "$APP_APK" |
+  python3 "$HERE/android_fixture.py" assetlinks >"$work/assetlinks.json"; then
+  fail "could not verify the APK and associate its signing certificate"
+fi
 
 phase "NGINX application origin"
 mkdir -m 700 "$work/nginx"
