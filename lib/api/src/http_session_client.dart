@@ -11,8 +11,8 @@ import 'wire.dart';
 /// [ApiFailureKind.configuration] and nothing is sent.
 ///
 /// A [transport] that is also a [StreamingTransport] yields a client that is
-/// a `RunReplaySource` ([HttpRunSessionClient]); a misconfigured client never
-/// is.
+/// a `RunReplaySource` and a `ConversationSource` ([HttpRunSessionClient]); a
+/// misconfigured client never is.
 SessionClient sessionClientFor(
   Transport transport, {
   required String login,

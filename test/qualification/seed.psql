@@ -2,8 +2,8 @@
 -- openmettle_owner with psql -X -q against the per-run database. It mirrors the approved
 -- identity setup of core src/provider_keys/tests/postgres/browser.rs at the pinned revision:
 -- register the provider and its first revision, set the ADR 0014 outstanding-login limit, and
--- create the synthetic user, identity and personal scope. This fixture also prints the ID
--- of a queued run that belongs to the synthetic user. Core's unchanged
+-- create the synthetic user, identity and personal scope. Print the queued run, conversation,
+-- root branch and fork IDs so the browser can exercise the real API. Core's unchanged
 -- docs/operator/first-identity-approval.psql then approves the identity (ADR 0013).
 -- Variables, all required: provider, issuer, client_id, revision, subject. Values are synthetic.
 \set ON_ERROR_STOP on
@@ -46,8 +46,35 @@ INSERT INTO openmettle.conversations (scope_id, scope_kind, owner_user_id)
 VALUES (:'scope_id', 'personal', :'user_id') RETURNING id AS conversation_id \gset
 INSERT INTO openmettle.conversation_branches (scope_id, conversation_id)
 VALUES (:'scope_id', :'conversation_id') RETURNING id AS branch_id \gset
+-- Publish a common turn, fork at that turn, then advance the two heads independently.
+INSERT INTO openmettle.branch_heads (scope_id, conversation_id, branch_id)
+VALUES (:'scope_id', :'conversation_id', :'branch_id');
 INSERT INTO openmettle.messages (scope_id, conversation_id)
-VALUES (:'scope_id', :'conversation_id') RETURNING id AS message_id \gset
+VALUES (:'scope_id', :'conversation_id') RETURNING id AS common_id \gset
+INSERT INTO openmettle.message_turns (scope_id, conversation_id, message_id, author_user_id)
+VALUES (:'scope_id', :'conversation_id', :'common_id', :'user_id');
+INSERT INTO openmettle.message_parts (scope_id, conversation_id, message_id, ordinal, kind, text_value)
+VALUES (:'scope_id', :'conversation_id', :'common_id', 0, 'text', 'Shared opening question.');
+UPDATE openmettle.branch_heads SET head_message_id = :'common_id' WHERE branch_id = :'branch_id';
+
+INSERT INTO openmettle.conversation_branches (scope_id, conversation_id, fork_message_id)
+VALUES (:'scope_id', :'conversation_id', :'common_id') RETURNING id AS fork_id \gset
+INSERT INTO openmettle.branch_heads (scope_id, conversation_id, branch_id, parent_branch_id, head_message_id)
+VALUES (:'scope_id', :'conversation_id', :'fork_id', :'branch_id', :'common_id');
+
+SELECT gen_random_uuid() AS message_id, gen_random_uuid() AS fork_message_id \gset
+INSERT INTO openmettle.messages (id, scope_id, conversation_id, parent_message_id)
+VALUES (:'message_id', :'scope_id', :'conversation_id', :'common_id'),
+       (:'fork_message_id', :'scope_id', :'conversation_id', :'common_id');
+INSERT INTO openmettle.message_turns (scope_id, conversation_id, message_id, author_user_id)
+VALUES (:'scope_id', :'conversation_id', :'message_id', :'user_id'),
+       (:'scope_id', :'conversation_id', :'fork_message_id', :'user_id');
+INSERT INTO openmettle.message_parts (scope_id, conversation_id, message_id, ordinal, kind, text_value)
+VALUES (:'scope_id', :'conversation_id', :'message_id', 0, 'text', 'Original branch follow-up.'),
+       (:'scope_id', :'conversation_id', :'fork_message_id', 0, 'text', 'Alternate branch follow-up.');
+UPDATE openmettle.branch_heads SET head_message_id = :'message_id' WHERE branch_id = :'branch_id';
+UPDATE openmettle.branch_heads SET head_message_id = :'fork_message_id' WHERE branch_id = :'fork_id';
+
 INSERT INTO openmettle.runs
     (scope_id, actor_user_id, conversation_id, branch_id, input_message_id,
      idempotency_key, snapshot_format, snapshot_version, input_snapshot,
@@ -61,4 +88,4 @@ INSERT INTO openmettle.run_events
 VALUES (:'scope_id', :'run_id', 1, 'run-created', 'openmettle.run-created', 1,
         ''::bytea, 'fixture'::bytea, sha256('fixture'::bytea));
 COMMIT;
-\echo :run_id
+\echo :run_id :conversation_id :branch_id :fork_id

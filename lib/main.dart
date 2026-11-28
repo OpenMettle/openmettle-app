@@ -5,6 +5,8 @@ import 'package:material_ui/material_ui.dart';
 
 import 'api/app_client.dart';
 import 'api/client.dart';
+import 'conversations/history.dart';
+import 'conversations/history_view.dart';
 import 'runs/run_replay.dart';
 import 'runs/run_status_view.dart';
 import 'runs/run_wire.dart' show isCanonicalRunId;
@@ -56,6 +58,7 @@ class _SessionScreenState extends State<_SessionScreen> {
   final _primaryFocus = FocusNode();
   final _signOutFocus = FocusNode();
   final _openRunFocus = FocusNode();
+  final _conversationsFocus = FocusNode();
   late final AppLifecycleListener _lifecycle;
   StreamSubscription<void>? _updates;
   bool _hidden = false;
@@ -63,10 +66,11 @@ class _SessionScreenState extends State<_SessionScreen> {
   int _request = 0;
   bool _recheckOnShow = false;
   List<Capability> _capabilities = const [];
+  bool _showHistory = false;
   bool _openingRun = false;
   String? _runId;
   bool _runInaccessible = false;
-  bool _restoreOpenRunFocus = false;
+  FocusNode? _returnFocus;
 
   @override
   void initState() {
@@ -97,6 +101,7 @@ class _SessionScreenState extends State<_SessionScreen> {
     _primaryFocus.dispose();
     _signOutFocus.dispose();
     _openRunFocus.dispose();
+    _conversationsFocus.dispose();
     super.dispose();
   }
 
@@ -156,11 +161,12 @@ class _SessionScreenState extends State<_SessionScreen> {
     setState(() {
       _phase = phase;
       _capabilities = capabilities;
+      if (phase != _Phase.signedIn) _showHistory = false;
       if (phase != _Phase.checking &&
           phase != _Phase.loading &&
           phase != _Phase.signedIn) {
         _clearRun();
-        _restoreOpenRunFocus = false;
+        _returnFocus = null;
       }
     });
   }
@@ -189,11 +195,12 @@ class _SessionScreenState extends State<_SessionScreen> {
       final capabilities = await widget.client.capabilities();
       if (_isCurrent(request)) {
         _show(_Phase.signedIn, capabilities: capabilities);
-        if (_restoreOpenRunFocus) {
-          _restoreOpenRunFocus = false;
+        final focus = _returnFocus;
+        _returnFocus = null;
+        if (focus != null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (_isCurrent(request) && _openRunFocus.context != null) {
-              _openRunFocus.requestFocus();
+            if (_isCurrent(request) && focus.context != null) {
+              focus.requestFocus();
             }
           });
         }
@@ -263,7 +270,7 @@ class _SessionScreenState extends State<_SessionScreen> {
   void _backFromRun() {
     if (_phase != _Phase.signedIn) return;
     _clearRun();
-    _restoreOpenRunFocus = true;
+    _returnFocus = _openRunFocus;
     _load();
   }
 
@@ -358,6 +365,26 @@ class _SessionScreenState extends State<_SessionScreen> {
   @override
   Widget build(BuildContext context) {
     final client = widget.client;
+    final canOpenHistory =
+        _phase == _Phase.signedIn && client is ConversationSource;
+    if (canOpenHistory && _showHistory) {
+      final request = _request;
+      return ConversationHistoryView(
+        source: client as ConversationSource,
+        onBack: () {
+          if (!_isCurrent(request) || !_showHistory) return;
+          _returnFocus = _conversationsFocus;
+          _load();
+        },
+        onSignOut: _signOut,
+        signOutFocus: _signOutFocus,
+        onSessionExpired: () {
+          if (!_isCurrent(request) || !_showHistory) return;
+          _request++;
+          _show(_Phase.signedOut);
+        },
+      );
+    }
     final canOpenRun = _phase == _Phase.signedIn && client is RunReplaySource;
     if (canOpenRun && (_openingRun || _runId != null || _runInaccessible)) {
       return _buildRunScreen(client as RunReplaySource);
@@ -421,6 +448,12 @@ class _SessionScreenState extends State<_SessionScreen> {
                           focusNode: _signOutFocus,
                           onPressed: _signOut,
                           child: const Text('Sign out'),
+                        ),
+                      if (canOpenHistory)
+                        OutlinedButton(
+                          focusNode: _conversationsFocus,
+                          onPressed: () => setState(() => _showHistory = true),
+                          child: const Text('Conversations'),
                         ),
                       if (canOpenRun)
                         OutlinedButton(

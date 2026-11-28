@@ -270,12 +270,14 @@ grep -E '^schema is at migration [0-9]+$' "$migrate_log" || fail "openmettle-mig
 
 phase "provider registration, synthetic identity and queued run"
 seed_log=$work/seed.log
-run_id=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v client_id="$client_id" \
+seed_ids=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v client_id="$client_id" \
   -v revision="$revision" -v subject="$subject" -f - <"$HERE/seed.psql" 2>"$seed_log") || {
   fail "qualification seed refused"
 }
-[[ $run_id =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ && ! -s $seed_log ]] ||
+uuid='[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+[[ $seed_ids =~ ^$uuid\ $uuid\ $uuid\ $uuid$ && ! -s $seed_log ]] ||
   fail "qualification seed output unexpected"
+read -r run_id conversation_id branch_id fork_id <<<"$seed_ids"
 
 phase "first identity approval (core operator script)"
 expires_ms=$(owner_psql -tA -c 'SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint + 1800000') ||
@@ -339,6 +341,9 @@ config=${config//@WORK@/$work}
 config=${config//@WEB@/$web}
 config=${config//@API@/$API_ADDRESS}
 config=${config//@RUN_ID@/$run_id}
+config=${config//@CONVERSATION@/$conversation_id}
+config=${config//@ROOT_BRANCH@/$branch_id}
+config=${config//@FORK_BRANCH@/$fork_id}
 printf '%s\n' "$config" >"$work/nginx/nginx.conf"
 nginx_args=(-p "$work/nginx" -c "$work/nginx/nginx.conf" -e "$work/nginx/error.log")
 timeout 10 nginx "${nginx_args[@]}" -t -q || fail "NGINX refused the generated configuration"
@@ -403,7 +408,8 @@ rm -f -- "$work/probe.body" "$work/probe.headers"
 
 # --- Browser journey -----------------------------------------------------------------------
 phase "Flutter browser journey"
-if ! timeout 300 python3 "$HERE/journey.py" "$CORE_DIR" "$fixture" "$app_ca" "$run_id"; then
+if ! timeout 300 python3 "$HERE/journey.py" "$CORE_DIR" "$fixture" "$app_ca" "$run_id" \
+    "$conversation_id" "$branch_id" "$fork_id"; then
   fail "Flutter browser journey failed"
 fi
 # A second snapshot could also supply the terminal state. Require one successful snapshot.

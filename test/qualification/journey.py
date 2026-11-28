@@ -3,11 +3,20 @@
 import json
 from pathlib import Path
 import sys
+from typing import NamedTuple
 
 
 APPLICATION = "https://app.relying.test:18443"
 ISSUER = "https://keycloak.provider.test:8443/realms/openmettle-qualification"
 APP_SECONDS = 25
+
+
+class FixtureIds(NamedTuple):
+    run: str
+    conversation: str
+    root: str
+    fork: str
+
 
 # Flutter exposes its controls and rendered labels through the semantics tree,
 # inside open shadow roots. Enable semantics again after each new document.
@@ -97,12 +106,13 @@ def sign_in(browser, provider, realm, account, keycloak, enter):
         raise keycloak.Failure("provider form changed before submission")
 
 
-def wait_http(browser, endpoint, status, phase):
-    # Observe the Flutter request, without issuing a separate request that
-    # could succeed even if Flutter never reached the API.
+def wait_http(browser, endpoint, status, phase, *, paginated=False):
+    # Observe the Flutter request. History list requests carry pagination parameters.
+    name = "entry.name.split('?')[0]" if paginated else "entry.name"
     wait_app(browser, "/app", f"""
-        performance.getEntriesByName({json.dumps(APPLICATION + endpoint)}, 'resource')
-            .some(entry => entry.responseStatus === {status} && entry.transferSize > 0)
+        performance.getEntriesByType('resource').some(entry =>
+            {name} === {json.dumps(APPLICATION + endpoint)}
+            && entry.responseStatus === {status} && entry.transferSize > 0)
     """, phase)
 
 
@@ -111,6 +121,39 @@ def signed_in(browser):
              "text('Signed in') && text('No capabilities were reported.') && !!button('Sign out')",
              "signed-in core-only capabilities did not render")
     wait_http(browser, "/v1/capabilities", 200, "live capabilities response was not HTTP 200")
+
+
+def read_history(browser, ids, failure):
+    base = "/v1/conversations"
+    branches = f"{base}/{ids.conversation}/branches"
+
+    def select(label):
+        wait_app(browser, "/app", f"!!button({json.dumps(label)})", "history control missing")
+        click_app(browser, "/app", label, failure)
+
+    select("Conversations")
+    select("Conversation " + ids.conversation)
+    wait_http(browser, base, 200, "conversation list did not come from core", paginated=True)
+    for branch, present, absent in (
+        (ids.fork, "Alternate branch follow-up.", "Original branch follow-up."),
+        (ids.root, "Original branch follow-up.", "Alternate branch follow-up."),
+    ):
+        select("Branch " + branch)
+        wait_http(browser, branches, 200, "branch list did not come from core", paginated=True)
+        wait_app(browser, "/app", f"""
+            text('Shared opening question.') && text({json.dumps(present)})
+            && !text({json.dumps(absent)})
+        """, "transcript did not match the selected branch")
+        wait_http(browser, f"{branches}/{branch}/messages", 200,
+                  "transcript did not come from core", paginated=True)
+        select("Back")
+    wait_app(browser, "/app", f"!!button({json.dumps('Branch ' + ids.root)})",
+             "Back did not return to the branch list")
+    select("Back")
+    wait_app(browser, "/app", f"!!button({json.dumps('Conversation ' + ids.conversation)})",
+             "Back did not return to the conversation list")
+    select("Back")
+    signed_in(browser)
 
 
 def follow_run(browser, run_id, failure):
@@ -167,7 +210,7 @@ def reload_app(browser):
         "app did not reload", APP_SECONDS)
 
 
-def journey(browser, provider, realm, account, run_id, qualify, keycloak, enter):
+def journey(browser, provider, realm, account, ids, qualify, keycloak, enter):
     enter("signed-out Flutter landing")
     qualify.open_target(browser)
     browser.call("Page.navigate", url=APPLICATION + "/")
@@ -193,7 +236,10 @@ def journey(browser, provider, realm, account, run_id, qualify, keycloak, enter)
     signed_in(browser)
 
     enter("Flutter run snapshot and event stream")
-    follow_run(browser, run_id, qualify.Failure)
+    follow_run(browser, ids.run, qualify.Failure)
+
+    enter("Flutter conversation and branch history")
+    read_history(browser, ids, qualify.Failure)
 
     enter("Flutter sign-out")
     click_app(browser, "/app", "Sign out", qualify.Failure)
@@ -226,31 +272,31 @@ def fixture_account(directory, keycloak):
     return account
 
 
-def run(directory, app_ca, run_id, qualify, keycloak, home, enter):
+def run(directory, app_ca, ids, qualify, keycloak, home, enter):
     enter("fixture input")
     account = fixture_account(directory, keycloak)
     _, app_host, _, _ = keycloak.site(APPLICATION, path_allowed=False)
     provider, host, port, realm = keycloak.site(ISSUER, path_allowed=True)
     address = keycloak.provider_address(host, port)
     qualify.drive(
-        lambda browser: journey(browser, provider, realm, account, run_id, qualify, keycloak, enter),
+        lambda browser: journey(browser, provider, realm, account, ids, qualify, keycloak, enter),
         [app_ca.read_bytes(), (directory / "provider-ca.pem").read_bytes()],
         keycloak.resolver_rules(app_host, host, address), home, enter,
     )
 
 
 def main():
-    if len(sys.argv) != 5:
-        sys.exit("usage: journey.py CORE_DIR FIXTURE_DIR APP_CA_PEM RUN_ID")
+    if len(sys.argv) != 8:
+        sys.exit("usage: journey.py CORE_DIR FIXTURE_DIR APP_CA_PEM RUN_ID CONVERSATION ROOT_BRANCH FORK_BRANCH")
     core, directory, app_ca = map(Path, sys.argv[1:4])
-    run_id = sys.argv[4]
+    ids = FixtureIds(*sys.argv[4:])
     try:
         sys.path.insert(0, str(core.resolve() / "tests/browser"))
         import keycloak
         import qualify
     except Exception:
         sys.exit("core browser helpers unavailable")
-    qualify.execute(lambda home, enter: run(directory, app_ca, run_id, qualify, keycloak, home, enter), 240)
+    qualify.execute(lambda home, enter: run(directory, app_ca, ids, qualify, keycloak, home, enter), 240)
     print("Flutter browser qualification passed")
 
 
