@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hosted CI only: qualify the compiled Flutter web client against the packaged openmettle-api
+# Hosted CI only: qualify the compiled Flutter web client and Android APK against openmettle-api
 # binary, a migrated PostgreSQL 18 database and stock pinned Keycloak 26.8.2, all on one
 # disposable GitHub-hosted Linux runner. Never run it against an operator system: it creates
 # PostgreSQL roles, a Docker network and container, and an /etc/hosts entry, and removes only
@@ -9,6 +9,7 @@
 #   CORE_DIR            core checkout at the pin in test/fixtures/core/MANIFEST, with
 #                       target/debug/openmettle-api and target/debug/openmettle-migrate built
 #   APP_WEB_DIR         `flutter build web` output (base href /)
+#   APP_APK             debug APK for the emulator started by emulator.sh
 #   RUNNER_TEMP         runner scratch directory
 #   POSTGRES_CONTAINER  job PostgreSQL 18 service on 127.0.0.1:5432, superuser `fixture`
 #   PROVIDER_IMAGE      Keycloak 26.8.2 image pinned by digest
@@ -123,7 +124,7 @@ phase "preflight"
 if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted || $(uname -s) != Linux ]]; then
   fail "provisions only on a disposable GitHub-hosted Linux runner"
 fi
-for name in CORE_DIR APP_WEB_DIR RUNNER_TEMP POSTGRES_CONTAINER PROVIDER_IMAGE; do
+for name in CORE_DIR APP_WEB_DIR APP_APK RUNNER_TEMP POSTGRES_CONTAINER PROVIDER_IMAGE; do
   [[ -n ${!name:-} ]] || fail "$name is required"
 done
 [[ -f $HERE/run.sh && -f test/fixtures/core/MANIFEST ]] || fail "run from the app repository root"
@@ -180,6 +181,8 @@ phase "provider fixture"
 python3 "$CORE_DIR/tests/keycloak/fixture.py" prepare --directory "$fixture" ||
   fail "core Keycloak fixture prepare failed"
 
+python3 "$HERE/android_fixture.py" realm "$fixture/import/realm.json"
+
 phase "isolated provider network and container"
 network_name=openmettle-app-qualification-$suffix
 provider_network=$(timeout 30 docker network create --internal "$network_name") ||
@@ -211,6 +214,7 @@ printf '%s %s\n' "$address" "$PROVIDER_HOST" | sudo -n tee -a /etc/hosts >/dev/n
 hosts_line="$address $PROVIDER_HOST"
 python3 "$CORE_DIR/tests/keycloak/fixture.py" settings --directory "$fixture" --address "$address" ||
   fail "core auth settings refused the provider address"
+python3 "$HERE/android_fixture.py" settings "$fixture/auth-settings.json"
 (core_env && exec timeout 30 "$api_bin" --check-auth-config "$fixture/auth-settings.json") ||
   fail "openmettle-api refused the auth settings document"
 IFS=$'\t' read -r provider_id issuer client_id revision origin landing < <(
@@ -274,7 +278,7 @@ seeded=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v client_id=
   fail "qualification seed output unexpected"
 
 phase "first identity approval (core operator script)"
-expires_ms=$(owner_psql -tA -c 'SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint + 600000') ||
+expires_ms=$(owner_psql -tA -c 'SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint + 1800000') ||
   fail "database clock unavailable"
 approval_log=$work/approval.log
 approved=$(owner_psql -v provider="$provider_id" -v issuer="$issuer" -v subject="$subject" \
@@ -304,7 +308,7 @@ subjectKeyIdentifier = hash
 basicConstraints = critical, CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:$APP_HOST
+subjectAltName = DNS:$APP_HOST,DNS:return.relying.test
 authorityKeyIdentifier = keyid
 EOF
 {
@@ -319,6 +323,14 @@ EOF
 } >/dev/null 2>&1 || fail "openssl refused an application certificate step"
 # The CA signs one certificate for this run and is then removed.
 rm -f -- "$tls/ca-key.pem" "$tls/leaf.csr" "$tls/openssl.cnf"
+
+phase "Android debug APK signing association"
+signer=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+[[ -x $signer && -f $APP_APK ]] || fail "Android APK or signer tool missing"
+if ! "$signer" verify --print-certs-pem "$APP_APK" |
+  python3 "$HERE/android_fixture.py" assetlinks >"$work/assetlinks.json"; then
+  fail "could not verify the APK and associate its signing certificate"
+fi
 
 phase "NGINX application origin"
 mkdir -m 700 "$work/nginx"
@@ -337,7 +349,7 @@ phase "provider discovery over TLS"
 python3 "$CORE_DIR/tests/keycloak/fixture.py" wait --directory "$fixture" --deadline 180 ||
   fail "Keycloak did not serve the fixture realm"
 
-phase "openmettle-api with browser sign-in"
+phase "openmettle-api with browser and native sign-in"
 (
   core_env
   export OPENMETTLE_API_BIND=$API_ADDRESS
@@ -407,6 +419,30 @@ SQL
 [[ $sessions == 1/1 ]] || fail "expected one consumed sign-in with its session revoked by logout"
 kill -0 "$api_pid" 2>/dev/null || fail "openmettle-api exited during the journey"
 disclosed "$api_log" && fail "openmettle-api output disclosed a database credential"
+
+phase "Android device trust and HTTPS App Link verification"
+timeout 550 bash "$HERE/android_device.sh" "$app_ca" "$fixture/provider-ca.pem" "$address" "$APP_APK" ||
+  fail "Android device setup or domain verification failed"
+
+# This file contains only response status codes for the exact capabilities route.
+web_successes=$(grep -cx 200 "$work/nginx/capabilities-status")
+phase "Android emulator journey"
+timeout 365 /usr/bin/python3 "$HERE/android_journey.py" "$fixture" "$CORE_DIR" ||
+  fail "Android emulator sign-in journey failed"
+successes=$(grep -cx 200 "$work/nginx/capabilities-status")
+((successes >= web_successes + 2)) || fail "expected authenticated Android capabilities before and after restart"
+native_sessions=$(owner_psql -tA -v issuer="$issuer" -v subject="$subject" -f - <<'SQL'
+SELECT count(*)
+  FROM openmettle.native_handoffs h
+  JOIN openmettle.local_sessions s ON h.session_id = s.id
+  JOIN openmettle.login_transactions t ON t.id = s.login_id
+  JOIN openmettle.user_identities i ON i.user_id = s.user_id
+ WHERE h.sealed IS NULL AND s.revoked AND t.consumed AND t.session_issued
+   AND i.issuer = :'issuer' AND i.subject = :'subject';
+SQL
+) || fail "native session state unreadable"
+[[ $native_sessions == 1 ]] || fail "expected one redeemed and revoked Android session for the approved identity"
+echo "Android qualification passed: verified App Link, native capabilities, process restart and revoked session."
 
 phase "passed"
 printf 'Flutter web qualification passed: Keycloak %s, PostgreSQL 18, core %s\n' \

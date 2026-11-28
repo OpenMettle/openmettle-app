@@ -1,6 +1,6 @@
 # OpenMettle app
 
-The Flutter web client checks the browser session and displays the capabilities visible to that session. The server reports installation, authorization and readiness separately. A signed-in user can receive an empty list on a core-only installation. This is the first web increment of [V1-33](https://github.com/OpenMettle/openmettle-app/issues/1).
+The Flutter client signs in and displays the capabilities visible to the current session. The server reports installation, authorization and readiness separately. A signed-in user can receive an empty list on a core-only installation. The client foundation is tracked in [V1-33](https://github.com/OpenMettle/openmettle-app/issues/1).
 
 ## Connect the web client
 
@@ -21,6 +21,23 @@ Serve the Flutter HTML page with `Referrer-Policy: same-origin`. With `no-referr
 
 If sign-in does not open, select **Check session** to recover. If the session has expired, sign in again. If the service is unavailable, retry after it recovers. If logout cannot be confirmed, retry sign-out before leaving a shared browser.
 
+## Connect an Android debug build
+
+Configure the three public build settings to match the API's version-2 `native` profile. The issuer is the HTTPS origin serving the API. The client ID identifies this native registration. Use a dedicated HTTPS App Link on a DNS host with a literal path. The provider registers the API's upstream callback. Android handles the separate App Link after the API completes sign-in. [Core native profile](https://github.com/OpenMettle/openmettle-core/blob/6e82f3b6edcdb3f3270170195623115462316948/docs/adr/0029-native-sign-in-mounting-and-session-context.md)
+
+Build a debug APK with the Android SDK and Flutter 3.50.0. Substitute your test registration for these synthetic values.
+
+```sh
+flutter build apk --debug --no-pub \
+  --dart-define=OPENMETTLE_NATIVE_ISSUER=https://app.relying.test:18443 \
+  --dart-define=OPENMETTLE_NATIVE_CLIENT_ID=synthetic.android \
+  --dart-define=OPENMETTLE_NATIVE_REDIRECT_URI=https://return.relying.test/native/complete
+```
+
+On the App Link host, serve `/.well-known/assetlinks.json` over trusted HTTPS. Associate `delegate_permission/common.handle_all_urls` with package `org.openmettle.app.debug` and the SHA-256 fingerprint of the certificate that signed the installed APK. Limit that debug association to the test host. On Android 12 or later, run `adb shell pm get-app-links org.openmettle.app.debug` and check that the host is marked `verified`. [Android App Link verification](https://developer.android.com/training/app-links/verify-applinks)
+
+Tap **Sign in**. Android opens the system browser for confirmation and provider sign-in. The verified link returns to Flutter, which exchanges the one-use code and its PKCE verifier for an OpenMettle session. Android Keystore protects the saved attempt and session. After restarting the app, Flutter checks the saved session before displaying capabilities. If sign-in expires, start a new attempt. If sign-out cannot be confirmed, select **Retry sign out** when the API is reachable. Release signing and association with a production domain require the owner's release identity.
+
 ## Development
 
 Use Flutter **3.50.0** and its bundled Dart SDK. The version is recorded in `.flutter-version`. [Flutter SDK archive](https://docs.flutter.dev/install/archive)
@@ -37,7 +54,7 @@ flutter build web --no-pub
 
 Client tests use synthetic responses and pinned core contract fixtures. CI also runs a browser sign-in journey against the core revision in the [fixture manifest](test/fixtures/core/MANIFEST). The Ubuntu runner serves the compiled Flutter application and the API on one HTTPS origin, starts stock Keycloak 26.8.2 with a disposable realm, and migrates a PostgreSQL 18.1 database. Chrome signs in as a pre-approved test user, returns to Flutter, checks the empty capabilities view across reload, signs out and reloads again. The job uses per-run trust and synthetic identities.
 
-The browser check covers the web session on the CI runner. Invitation-code entry, native sign-in and site ingress qualification are separate work. Choose application identifiers and signing settings before generating the native platform shells.
+The Android CI journey installs the debug APK on a disposable Android 13 (API 33) AOSP emulator. Android's StatementService fetches the association from the private test host. The journey checks Android's verification result, drives the installed Chromium browser through Keycloak, checks capabilities before and after restarting Flutter, and checks session revocation in PostgreSQL. The fixture serves the certificate association for the installed APK and installs its test CAs only on that emulator. iOS, physical devices, production App Link ownership and site ingress need separate qualification.
 
 ## Boundaries
 

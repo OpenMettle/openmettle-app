@@ -27,7 +27,9 @@ jobs:
   flutter:
     name: Flutter web client
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 100
+    env:
+      ANDROID_SERIAL: emulator-5554
     services:
       postgres:
         image: postgres:18.1-bookworm@sha256:cc9f4143a8d2fa8cf3749d0cb4d26ecf2d53a77a2ac807e9ebd67ae22426221a
@@ -44,12 +46,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Install pinned Flutter SDK
+      - name: Set up pinned Flutter and the runner’s Android SDK tools
         shell: bash
         run: |
           git clone --depth 1 --branch 3.50.0 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = ab2912035e160d9cad6306df307576da6128ebdb
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$RUNNER_TEMP/flutter/bin" "$ANDROID_HOME/cmdline-tools/latest/bin" \
+            "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
       - run: flutter pub get --enforce-lockfile
       - run: dart format --output=none --set-exit-if-changed lib test
@@ -75,16 +78,29 @@ jobs:
       - name: Build the API and migrator
         working-directory: ${{ runner.temp }}/openmettle-core
         run: cargo build --locked --bin openmettle-api --bin openmettle-migrate
+      - name: Build the debug APK for the emulator
+        run: >-
+          flutter build apk --debug --no-pub --target-platform android-x64
+          --dart-define=OPENMETTLE_NATIVE_ISSUER=https://app.relying.test:18443
+          --dart-define=OPENMETTLE_NATIVE_CLIENT_ID=synthetic.android
+          --dart-define=OPENMETTLE_NATIVE_REDIRECT_URI=https://return.relying.test/native/complete
+      - name: Test the Android host
+        run: |
+          cp build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/openmettle-debug.apk"
+          cd android
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug
+      - name: Start the Android API 33 emulator
+        timeout-minutes: 18
+        run: bash test/qualification/emulator.sh
       - name: Install qualification tools
         run: |
-          if ! command -v nginx >/dev/null || ! command -v certutil >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends nginx-light libnss3-tools
-          fi
-      - name: Qualify Flutter sign-in and logout with Keycloak
-        timeout-minutes: 30
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx-light libnss3-tools python3-websocket
+      - name: Qualify Flutter web and Android sign-in with Keycloak
+        timeout-minutes: 45
         env:
           PROVIDER_IMAGE: quay.io/keycloak/keycloak@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
           POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          APP_APK: ${{ runner.temp }}/openmettle-debug.apk
           APP_WEB_DIR: ${{ github.workspace }}/build/web
         run: bash test/qualification/run.sh
