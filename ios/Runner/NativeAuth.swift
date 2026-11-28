@@ -197,7 +197,11 @@ final class KeychainStore {
       guard attributes[.type] as? FileAttributeType == .typeRegular else {
         throw CocoaError(.fileReadCorruptFile)
       }
-    } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+    } catch {
+      let failure = error as NSError
+      guard failure.domain == NSCocoaErrorDomain,
+        [NSFileReadNoSuchFileError, NSFileNoSuchFileError].contains(failure.code)
+      else { throw error }
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       var values = URLResourceValues()
       values.isExcludedFromBackup = true
