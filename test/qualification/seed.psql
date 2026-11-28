@@ -1,0 +1,41 @@
+-- CI-only seed for the hosted Flutter browser qualification, run by run.sh as
+-- openmettle_owner with psql -X -q against the per-run database. It mirrors the approved
+-- identity setup of core src/provider_keys/tests/postgres/browser.rs at the pinned revision:
+-- register the provider and its first revision, set the ADR 0014 outstanding-login limit, and
+-- create the synthetic user, identity and personal scope. Core's unchanged
+-- docs/operator/first-identity-approval.psql then approves the identity (ADR 0013).
+-- Variables, all required: provider, issuer, client_id, revision, subject. Values are synthetic.
+\set ON_ERROR_STOP on
+\set VERBOSITY terse
+-- ADR 0012 operator protocol for the first revision of a new provider.
+BEGIN;
+SET LOCAL lock_timeout = '2s';
+SET LOCAL statement_timeout = '5s';
+SET LOCAL synchronous_commit = on;
+INSERT INTO openmettle.login_providers (id, issuer, client_id, changed_by, change_reason)
+VALUES (:'provider'::uuid, :'issuer', :'client_id', 'fixture-owner', 'keycloak qualification provider');
+INSERT INTO openmettle.login_provider_revisions (provider_id, revision)
+VALUES (:'provider'::uuid, :'revision');
+COMMIT;
+
+-- Fresh migrations leave the limit NULL, which refuses every sign-in.
+WITH admitted AS (
+  UPDATE openmettle.login_admission
+     SET outstanding_limit = 64, changed_by = 'fixture-owner',
+         change_reason = 'synthetic test limit', changed_at = clock_timestamp()
+   WHERE id
+  RETURNING 1
+)
+SELECT count(*) = 1 AS admitted FROM admitted \gset
+\if :admitted
+\else
+  DO $refused$ BEGIN RAISE EXCEPTION 'seed refused: login admission row missing'; END; $refused$;
+\endif
+
+BEGIN;
+INSERT INTO openmettle.users DEFAULT VALUES RETURNING id::text AS user_id \gset
+INSERT INTO openmettle.user_identities (user_id, issuer, subject)
+VALUES (:'user_id'::uuid, :'issuer', :'subject');
+INSERT INTO openmettle.scopes (kind, personal_user_id) VALUES ('personal', :'user_id'::uuid);
+COMMIT;
+\echo 'qualification identity seeded'

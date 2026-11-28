@@ -21,11 +21,25 @@ jobs:
           persist-credentials: false
       - name: Check repository hygiene
         run: python3 scripts/check_repository.py
+      - name: Test browser qualification inputs
+        run: python3 -m unittest discover -s test/qualification
 
   flutter:
     name: Flutter web client
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 50
+    services:
+      postgres:
+        image: postgres:18.1-bookworm@sha256:cc9f4143a8d2fa8cf3749d0cb4d26ecf2d53a77a2ac807e9ebd67ae22426221a
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: fixture
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d fixture"
+          --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -42,4 +56,35 @@ jobs:
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub
       - run: flutter test --no-pub --platform chrome test/api/fetch_transport_browser_test.dart
-      - run: flutter build web --no-pub
+      - name: Build Flutter for the qualification origin
+        run: >-
+          flutter build web --no-pub --no-web-resources-cdn
+          --dart-define=OPENMETTLE_LOGIN_PATH=/login
+          --dart-define=OPENMETTLE_SESSION_PATH=/session
+          --dart-define=OPENMETTLE_LOGOUT_PATH=/logout
+      - name: Check out the core revision that supplied the consumer fixtures
+        run: |
+          core_pin=$(sed -n '/^[0-9a-f]\{40\}$/p' test/fixtures/core/MANIFEST)
+          [[ "$core_pin" =~ ^[0-9a-f]{40}$ ]]
+          core_dir="$RUNNER_TEMP/openmettle-core"
+          git init --quiet "$core_dir"
+          git -C "$core_dir" fetch --quiet --depth 1 https://github.com/OpenMettle/openmettle-core.git "$core_pin"
+          git -C "$core_dir" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$core_dir" rev-parse HEAD)" = "$core_pin"
+          echo "CORE_DIR=$core_dir" >> "$GITHUB_ENV"
+      - name: Build the API and migrator
+        working-directory: ${{ runner.temp }}/openmettle-core
+        run: cargo build --locked --bin openmettle-api --bin openmettle-migrate
+      - name: Install qualification tools
+        run: |
+          if ! command -v nginx >/dev/null || ! command -v certutil >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends nginx-light libnss3-tools
+          fi
+      - name: Qualify Flutter sign-in and logout with Keycloak
+        timeout-minutes: 30
+        env:
+          PROVIDER_IMAGE: quay.io/keycloak/keycloak@sha256:c68e286cacd87b942ac1939a0a1481461109d6acd3a57dc496969a319a76bbf0
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          APP_WEB_DIR: ${{ github.workspace }}/build/web
+        run: bash test/qualification/run.sh
